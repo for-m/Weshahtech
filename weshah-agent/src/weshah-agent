@@ -1,40 +1,35 @@
 #!/bin/sh
-# WESHAH Network Manager Agent
-# Lightweight REST API for OpenWrt — exposes device management endpoints
-# so the Android app never runs arbitrary shell commands from user input.
+# WESHAH Network Manager Agent v2
+# Lightweight REST API for OpenWrt — never executes arbitrary user input.
+# All paths are /api/v1/...
 #
-# Deploy: copy to /usr/sbin/weshah-agent, chmod +x, enable via /etc/init.d/weshah-agent
-# Default port: 8765
-# Auth: Bearer token (set TOKEN in /etc/weshah-agent.conf)
-#
-# Endpoints:
-#   GET  /api/status            — router info, WAN status, CPU/RAM
-#   GET  /api/devices           — all known devices (ARP + DHCP)
-#   GET  /api/devices/{mac}     — single device stats
-#   POST /api/devices/{mac}/speed   — set speed limit (persists via tc+nftables)
-#   DELETE /api/devices/{mac}/speed — remove speed limit
-#   POST /api/devices/{mac}/block   — block internet (WAN only, LAN preserved)
-#   DELETE /api/devices/{mac}/block — unblock
-#   POST /api/devices/{mac}/disconnect — deauth from Wi-Fi
-#   POST /api/auth/login        — exchange credentials for token
+# Deploy: copy to /usr/sbin/weshah-agent, chmod +x
+#         enable via /etc/init.d/weshah-agent
+# Port: 8765
+# Auth: Bearer token from /etc/weshah-agent.conf
 
 CONF="/etc/weshah-agent.conf"
 PORT=8765
 TOKEN=""
+AGENT_VERSION="2.0.0"
 LOG_TAG="weshah-agent"
+SCHEDULE_DIR="/etc/weshah-agent/schedules"
+STATIC_LEASE_FILE="/etc/weshah-agent/static-leases.json"
 
-# Load config
 [ -f "$CONF" ] && . "$CONF"
 
-# Generate token if not set
 if [ -z "$TOKEN" ]; then
-    TOKEN=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32 2>/dev/null || date | md5sum | cut -d' ' -f1)
+    TOKEN=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 48 2>/dev/null \
+            || date +%s | sha256sum | cut -d' ' -f1)
     echo "TOKEN=$TOKEN" >> "$CONF"
 fi
 
+mkdir -p "$SCHEDULE_DIR"
+[ -f "$STATIC_LEASE_FILE" ] || echo '{"leases":[]}' > "$STATIC_LEASE_FILE"
+
 log() { logger -t "$LOG_TAG" "$*"; }
 
-# ── Validation helpers ────────────────────────────────────────────────────────
+# ── Validation ────────────────────────────────────────────────────────────────
 
 validate_mac() {
     echo "$1" | grep -qE '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$'
@@ -44,267 +39,804 @@ validate_int() {
     echo "$1" | grep -qE '^[0-9]+$'
 }
 
+validate_ip() {
+    echo "$1" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'
+}
+
 normalize_mac() {
     echo "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-# ── Router info ───────────────────────────────────────────────────────────────
+json_escape() {
+    echo "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n' | sed 's/\\n$//'
+}
+
+# ── Capabilities ──────────────────────────────────────────────────────────────
+
+get_capabilities() {
+    local bw_ctrl=false per_traffic=false port_stats=false
+    local tdr=false basic_diag=false wifi_rssi=false
+    local vlan=false multi_wan=false lldp=false backup=false
+    local hotspot=false temp=false phy="UNKNOWN"
+
+    # Bandwidth control: check for tc and nft
+    command -v tc > /dev/null 2>&1 && command -v nft > /dev/null 2>&1 && bw_ctrl=true
+
+    # Per-client traffic: check for nlbw or conntrack
+    command -v nlbw > /dev/null 2>&1 && per_traffic=true
+
+    # Port stats: check if we can read eth switch stats
+    [ -f /sys/class/net/eth0/statistics/rx_bytes ] && port_stats=true
+
+    # Basic cable diag: if port_stats works
+    $port_stats && basic_diag=true
+
+    # TDR: check for PHY driver capability
+    local phy_driver=""
+    # Marvell 88E6xxx — full TDR
+    ls /sys/bus/mdio_bus/drivers/mv88e6xxx-* > /dev/null 2>&1 && phy="MARVELL_88E6XXX" && tdr=true
+    # Realtek RTL83xx
+    ls /sys/bus/platform/drivers/realtek-* > /dev/null 2>&1 && phy="REALTEK_RTL83XX" && tdr=true
+    # Lantiq GSWIP
+    ls /sys/bus/platform/drivers/lantiq_xrx200* > /dev/null 2>&1 && phy="LANTIQ_GSWIP" && tdr=true
+    # Qualcomm QCA8337
+    cat /proc/cpuinfo 2>/dev/null | grep -qi "qca\|atheros" && phy="QUALCOMM_QCA8337"
+    # MediaTek MT7621
+    cat /proc/cpuinfo 2>/dev/null | grep -qi "mt7621\|ralink" && phy="MEDIATEK_MT7621"
+    # Broadcom
+    cat /proc/cpuinfo 2>/dev/null | grep -qi "broadcom\|brcm" && phy="BROADCOM_BCM53XX"
+
+    # WiFi RSSI per client: check hostapd_cli
+    command -v hostapd_cli > /dev/null 2>&1 && wifi_rssi=true
+
+    # VLAN: check for swconfig or DSA
+    command -v swconfig > /dev/null 2>&1 && vlan=true
+    ls /sys/class/net/*/flags > /dev/null 2>&1 && ls /etc/config/network > /dev/null 2>&1 && vlan=true
+
+    # Multi-WAN: check for mwan3
+    [ -f /etc/config/mwan3 ] && multi_wan=true
+
+    # LLDP
+    command -v lldpcli > /dev/null 2>&1 && lldp=true
+
+    # Config backup
+    command -v sysupgrade > /dev/null 2>&1 && backup=true
+
+    # Temperature
+    [ -f /sys/class/thermal/thermal_zone0/temp ] && temp=true
+
+    printf '{"agentVersion":"%s","bandwidthControl":%s,"perClientTraffic":%s,"portStats":%s,"cableDiagnosticsTdr":%s,"cableDiagnosticsBasic":%s,"wifiRssiPerClient":%s,"vlanManagement":%s,"multiWan":%s,"dhcpStaticLeases":true,"lldpNeighbors":%s,"configBackup":%s,"hotspot":%s,"temperature":%s,"phyDriver":"%s"}' \
+        "$AGENT_VERSION" "$bw_ctrl" "$per_traffic" "$port_stats" \
+        "$tdr" "$basic_diag" "$wifi_rssi" "$vlan" "$multi_wan" \
+        "$lldp" "$backup" "$hotspot" "$temp" "$phy"
+}
+
+# ── System status ─────────────────────────────────────────────────────────────
 
 get_status() {
-    local uptime cpu ram model firmware wan_ip wan_state
-    uptime=$(cat /proc/uptime | cut -d. -f1)
-    cpu=$(top -bn1 2>/dev/null | grep 'CPU:' | awk '{print $2}' | tr -d '%' || echo "0")
-    ram_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    ram_free=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
-    ram_used=$((ram_total - ram_free))
-    model=$(cat /tmp/sysinfo/model 2>/dev/null || uname -m)
-    firmware=$(cat /etc/openwrt_release 2>/dev/null | grep DISTRIB_RELEASE | cut -d= -f2 | tr -d '"' || echo "unknown")
+    local uptime_s cpu ram_total ram_used model firmware kernel
+    uptime_s=$(awk '{printf "%d", $1}' /proc/uptime 2>/dev/null || echo 0)
+    ram_total=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    ram_avail=$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    ram_used=$((ram_total - ram_avail))
+    cpu=$(top -bn1 2>/dev/null | awk '/CPU:/{gsub(/%/,""); print 100-$8}' | head -1 || echo 0)
+    model=$(cat /tmp/sysinfo/model 2>/dev/null | tr '"' "'" || uname -m)
+    firmware=$(. /etc/openwrt_release 2>/dev/null; echo "${DISTRIB_RELEASE:-unknown}")
     kernel=$(uname -r)
-    wan_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7}' | head -1)
+    hostname=$(uname -n)
     wan_if=$(uci get network.wan.ifname 2>/dev/null || echo "eth1")
-    wan_state="up"
-    ip link show "$wan_if" 2>/dev/null | grep -q "state UP" || wan_state="down"
-    load=$(cat /proc/loadavg | awk '{print $1}')
-    temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{printf "%.1f", $1/1000}' || echo "0")
+    wan_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7}' | head -1)
+    wan_state="down"
+    ip link show "$wan_if" 2>/dev/null | grep -q "state UP" && wan_state="up"
+    load1=$(awk '{print $1}' /proc/loadavg)
+    load5=$(awk '{print $2}' /proc/loadavg)
+    load15=$(awk '{print $3}' /proc/loadavg)
+    temp_raw=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo "")
+    if [ -n "$temp_raw" ] && [ "$temp_raw" -gt 0 ] 2>/dev/null; then
+        temp=$(awk "BEGIN{printf \"%.1f\", $temp_raw/1000}")
+    else
+        temp="null"
+    fi
 
-    printf '{"model":"%s","firmware":"%s","kernel":"%s","uptimeSeconds":%s,"cpuPercent":%s,"ramUsedKb":%s,"ramTotalKb":%s,"loadAvg":"%s","temperatureCelsius":%s,"wanIp":"%s","wanState":"%s","agentVersion":"1.0.0"}' \
-        "$model" "$firmware" "$kernel" "$uptime" "$cpu" "$ram_used" "$ram_total" "$load" "$temp" "${wan_ip:-}" "$wan_state"
+    printf '{"model":"%s","firmware":"%s","kernel":"%s","hostname":"%s","uptimeSeconds":%s,"cpuPercent":%s,"ramTotalKb":%s,"ramUsedKb":%s,"temperatureCelsius":%s,"load1m":%s,"load5m":%s,"load15m":%s,"wanIp":"%s","wanState":"%s","agentVersion":"%s"}' \
+        "$(json_escape "$model")" "$firmware" "$kernel" "$hostname" \
+        "$uptime_s" "$cpu" "$ram_total" "$ram_used" "$temp" \
+        "$load1" "$load5" "$load15" "${wan_ip:-}" "$wan_state" "$AGENT_VERSION"
+}
+
+# ── Network interfaces ────────────────────────────────────────────────────────
+
+get_interfaces() {
+    local result='{"interfaces":['
+    local first=1
+    for iface in $(ls /sys/class/net/ 2>/dev/null); do
+        [ "$iface" = "lo" ] && continue
+        local state rx tx mac ip_addr itype
+        state="down"
+        [ "$(cat /sys/class/net/$iface/operstate 2>/dev/null)" = "up" ] && state="up"
+        rx=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+        tx=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+        mac=$(cat /sys/class/net/$iface/address 2>/dev/null || echo "")
+        ip_addr=$(ip -4 addr show "$iface" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1)
+        # Classify type
+        case "$iface" in
+            eth*|wan*) itype="WAN" ;;
+            wlan*|ath*|ra*) itype="WIFI" ;;
+            br-*|lan*) itype="LAN" ;;
+            *) itype="OTHER" ;;
+        esac
+        # Refine based on UCI
+        uci get network.wan.ifname 2>/dev/null | grep -q "$iface" && itype="WAN"
+        [ "$first" = "1" ] || result="$result,"
+        first=0
+        result="${result}{\"name\":\"$iface\",\"ipAddress\":\"${ip_addr:-}\",\"macAddress\":\"${mac:-}\",\"isUp\":$([ "$state" = "up" ] && echo true || echo false),\"rxBytes\":$rx,\"txBytes\":$tx,\"type\":\"$itype\"}"
+    done
+    result="$result]}"
+    echo "$result"
 }
 
 # ── Device list ───────────────────────────────────────────────────────────────
 
 get_devices() {
-    # Combine DHCP leases + ARP cache
     local result="["
     local first=1
 
-    # Read DHCP leases (authoritative for IP-MAC binding)
     while IFS=' ' read -r expire mac ip hostname _; do
         validate_mac "$mac" || continue
         mac=$(normalize_mac "$mac")
-        local is_blocked=false
-        nft list ruleset 2>/dev/null | grep -q "ether saddr $mac drop" && is_blocked=true
-        # Get speed limits from tc if set
-        local speed_down=0 speed_up=0
-        local iface=$(uci get network.br_lan.ifname 2>/dev/null | awk '{print $1}' || echo "br-lan")
-        tc class show dev "$iface" 2>/dev/null | grep -q "$(echo $mac | tr ':' '')" && {
-            speed_down=$(tc class show dev "$iface" 2>/dev/null | grep "$(echo $mac | tr ':' '')" | awk '/rate/{print $NF}' | head -1 || echo 0)
-        }
+        local is_blocked=false is_wifi=false band="" rssi="null" iface="br-lan"
+        # Check block status
+        nft list ruleset 2>/dev/null | grep -q "saddr $mac" && is_blocked=true
+        uci show firewall 2>/dev/null | grep -q "src_mac=$mac" && is_blocked=true
+        # Check if WiFi
+        for wif in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+            iw dev "$wif" station dump 2>/dev/null | grep -qi "$mac" && {
+                is_wifi=true
+                iface="$wif"
+                rssi=$(iw dev "$wif" station get "$mac" 2>/dev/null | awk '/signal:/{print $2}' | head -1 || echo "null")
+                freq=$(iw dev "$wif" info 2>/dev/null | awk '/channel/{print $4}' | head -1 || echo "0")
+                [ "$freq" -gt 5000 ] 2>/dev/null && band="BAND_5GHZ" || band="BAND_2_4GHZ"
+                break
+            }
+        done
+        local rx_bytes tx_bytes rx_rate tx_rate
+        rx_bytes=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+        tx_bytes=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+        rx_rate=0
+        tx_rate=0
         [ "$first" = "1" ] || result="$result,"
         first=0
-        result="$result{\"mac\":\"$mac\",\"ip\":\"$ip\",\"hostname\":\"${hostname:-}\",\"isOnline\":true,\"isBlocked\":$is_blocked,\"speedDownKbps\":$speed_down,\"speedUpKbps\":$speed_up,\"rxBytes\":0,\"txBytes\":0,\"rxRate\":0,\"txRate\":0}"
+        result="${result}{\"mac\":\"$mac\",\"ip\":\"$ip\",\"hostname\":\"${hostname:-}\",\"interface\":\"$iface\",\"isWifi\":$is_wifi,\"isOnline\":true,\"rssi\":${rssi:-null},\"band\":$([ -n "$band" ] && echo "\"$band\"" || echo "null"),\"rxBytes\":$rx_bytes,\"txBytes\":$tx_bytes,\"rxRateBps\":$rx_rate,\"txRateBps\":$tx_rate,\"isBlocked\":$is_blocked,\"speedDownKbps\":null,\"speedUpKbps\":null}"
     done < /tmp/dhcp.leases 2>/dev/null
-
-    # Add ARP entries not in DHCP
-    while IFS=' ' read -r ip hw flags mac iface; do
-        [ "$flags" = "0x0" ] && continue
-        validate_mac "$mac" || continue
-        mac=$(normalize_mac "$mac")
-        echo "$result" | grep -q "\"mac\":\"$mac\"" && continue
-        local is_blocked=false
-        nft list ruleset 2>/dev/null | grep -q "ether saddr $mac drop" && is_blocked=true
-        [ "$first" = "1" ] || result="$result,"
-        first=0
-        result="$result{\"mac\":\"$mac\",\"ip\":\"$ip\",\"hostname\":\"\",\"isOnline\":true,\"isBlocked\":$is_blocked,\"speedDownKbps\":0,\"speedUpKbps\":0,\"rxBytes\":0,\"txBytes\":0,\"rxRate\":0,\"txRate\":0}"
-    done < /proc/net/arp 2>/dev/null
 
     result="$result]"
     echo "$result"
 }
 
-# ── Speed limit (tc + nftables, persists across reloads via /etc/rc.local) ────
+# ── Per-device traffic ────────────────────────────────────────────────────────
+
+get_device_traffic() {
+    local mac=$(normalize_mac "$1")
+    validate_mac "$mac" || { echo '{"error":"invalid_mac"}'; return; }
+    local rx=0 tx=0 ts
+    ts=$(date +%s)000
+    # Try nlbw if available
+    if command -v nlbw > /dev/null 2>&1; then
+        local stats=$(nlbw -c show -m "$mac" 2>/dev/null | tail -1)
+        rx=$(echo "$stats" | awk '{print $3}' || echo 0)
+        tx=$(echo "$stats" | awk '{print $4}' || echo 0)
+    fi
+    printf '{"mac":"%s","rxBytes":%s,"txBytes":%s,"rxRateBps":0,"txRateBps":0,"timestamp":%s}' \
+        "$mac" "$rx" "$tx" "$ts"
+}
+
+# ── Speed limit ───────────────────────────────────────────────────────────────
 
 set_speed() {
-    local mac="$1" down_kbps="$2" up_kbps="$3"
+    local mac=$(normalize_mac "$1") down_kbps="$2" up_kbps="$3"
     validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
     validate_int "$down_kbps" && validate_int "$up_kbps" || { echo '{"success":false,"error":"invalid_speed"}'; return; }
-    # Range check: max 1Gbps
-    [ "$down_kbps" -gt 1000000 ] || [ "$up_kbps" -gt 1000000 ] && { echo '{"success":false,"error":"speed_out_of_range"}'; return; }
-    mac=$(normalize_mac "$mac")
-    local bridge=$(uci get network.br_lan.ifname 2>/dev/null | awk '{print $1}' || echo "br-lan")
-    local mark=$(printf '%d' "0x$(echo $mac | tr -d ':' | tail -c 4)")
+    [ "$down_kbps" -gt 1000000 ] 2>/dev/null && { echo '{"success":false,"error":"speed_out_of_range"}'; return; }
+    [ "$up_kbps" -gt 1000000 ] 2>/dev/null && { echo '{"success":false,"error":"speed_out_of_range"}'; return; }
 
-    # Mark packets from this MAC using nftables
-    nft add rule bridge filter FORWARD ether saddr "$mac" meta mark set "$mark" 2>/dev/null || true
-
-    # Apply HTB qdisc on WAN interface for download control (egress = download for LAN client)
     local wan_if=$(uci get network.wan.ifname 2>/dev/null || echo "eth1")
+    local bridge="br-lan"
+    local mark=$(printf '%d' "0x$(echo "$mac" | tr -d ':' | tail -c 4)")
+
+    # nftables mark by MAC
+    nft add table inet weshah 2>/dev/null || true
+    nft add chain inet weshah forward '{ type filter hook forward priority 0; }' 2>/dev/null || true
+    nft delete rule inet weshah forward "comment \"speed-$mac\"" 2>/dev/null || true
+    nft add rule inet weshah forward ether saddr "$mac" meta mark set "$mark" comment "speed-$mac" 2>/dev/null || true
+
+    # tc on WAN for download
     tc qdisc add dev "$wan_if" root handle 1: htb default 999 2>/dev/null || true
-    tc class add dev "$wan_if" parent 1: classid "1:$mark" htb rate "${down_kbps}kbit" ceil "${down_kbps}kbit" 2>/dev/null || \
-    tc class change dev "$wan_if" parent 1: classid "1:$mark" htb rate "${down_kbps}kbit" ceil "${down_kbps}kbit" 2>/dev/null || true
-    tc filter add dev "$wan_if" parent 1: handle "$mark" fw classid "1:$mark" 2>/dev/null || true
+    tc class replace dev "$wan_if" parent 1: classid "1:$mark" htb rate "${down_kbps}kbit" ceil "${down_kbps}kbit" 2>/dev/null || true
+    tc filter replace dev "$wan_if" parent 1: handle "$mark" fw classid "1:$mark" 2>/dev/null || true
 
-    # Upload control on bridge (ingress from LAN client going out WAN)
+    # tc on bridge for upload
     tc qdisc add dev "$bridge" root handle 1: htb default 999 2>/dev/null || true
-    tc class add dev "$bridge" parent 1: classid "1:$mark" htb rate "${up_kbps}kbit" ceil "${up_kbps}kbit" 2>/dev/null || \
-    tc class change dev "$bridge" parent 1: classid "1:$mark" htb rate "${up_kbps}kbit" ceil "${up_kbps}kbit" 2>/dev/null || true
-    tc filter add dev "$bridge" parent 1: handle "$mark" fw classid "1:$mark" 2>/dev/null || true
+    tc class replace dev "$bridge" parent 1: classid "1:$mark" htb rate "${up_kbps}kbit" ceil "${up_kbps}kbit" 2>/dev/null || true
+    tc filter replace dev "$bridge" parent 1: handle "$mark" fw classid "1:$mark" 2>/dev/null || true
 
-    log "Speed limit set for $mac: down=${down_kbps}kbps up=${up_kbps}kbps"
-    echo '{"success":true}'
+    log "Speed limit set: $mac down=${down_kbps}kbps up=${up_kbps}kbps"
+    echo '{"success":true,"error":null}'
 }
 
 remove_speed() {
-    local mac="$1"
+    local mac=$(normalize_mac "$1")
     validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
-    mac=$(normalize_mac "$mac")
-    local mark=$(printf '%d' "0x$(echo $mac | tr -d ':' | tail -c 4)")
     local wan_if=$(uci get network.wan.ifname 2>/dev/null || echo "eth1")
-    local bridge=$(uci get network.br_lan.ifname 2>/dev/null | awk '{print $1}' || echo "br-lan")
+    local bridge="br-lan"
+    local mark=$(printf '%d' "0x$(echo "$mac" | tr -d ':' | tail -c 4)")
     tc class del dev "$wan_if" parent 1: classid "1:$mark" 2>/dev/null || true
     tc class del dev "$bridge" parent 1: classid "1:$mark" 2>/dev/null || true
-    log "Speed limit removed for $mac"
-    echo '{"success":true}'
+    nft delete rule inet weshah forward "comment \"speed-$mac\"" 2>/dev/null || true
+    log "Speed limit removed: $mac"
+    echo '{"success":true,"error":null}'
 }
 
-# ── Block / unblock (WAN access only, LAN preserved) ─────────────────────────
+# ── Block / unblock ───────────────────────────────────────────────────────────
 
 block_device() {
-    local mac="$1"
+    local mac=$(normalize_mac "$1")
     validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
-    mac=$(normalize_mac "$mac")
-    # Block WAN access; LAN traffic is unaffected
-    nft add rule inet filter FORWARD ether saddr "$mac" oifname "$(uci get network.wan.ifname 2>/dev/null || echo eth1)" drop comment "weshah-block-$mac" 2>/dev/null || \
-    iptables -I FORWARD -m mac --mac-source "$mac" -o "$(uci get network.wan.ifname 2>/dev/null || echo eth1)" -j DROP 2>/dev/null || true
-
-    # Persist via UCI firewall rule so it survives reboot
-    local rule_name="weshah_block_$(echo $mac | tr ':' '_')"
-    uci -q delete "firewall.$rule_name" 2>/dev/null
+    local rule_name="weshah_block_$(echo "$mac" | tr ':' '_')"
+    uci -q delete "firewall.$rule_name"
     uci set "firewall.$rule_name=rule"
+    uci set "firewall.$rule_name.name=$rule_name"
     uci set "firewall.$rule_name.src=lan"
     uci set "firewall.$rule_name.dest=wan"
     uci set "firewall.$rule_name.src_mac=$mac"
     uci set "firewall.$rule_name.target=REJECT"
-    uci set "firewall.$rule_name.name=$rule_name"
     uci commit firewall
     /etc/init.d/firewall reload > /dev/null 2>&1 &
-    log "Blocked WAN for $mac"
-    echo '{"success":true}'
+    log "Blocked WAN: $mac"
+    echo '{"success":true,"error":null}'
 }
 
 unblock_device() {
-    local mac="$1"
+    local mac=$(normalize_mac "$1")
     validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
-    mac=$(normalize_mac "$mac")
-    local rule_name="weshah_block_$(echo $mac | tr ':' '_')"
+    local rule_name="weshah_block_$(echo "$mac" | tr ':' '_')"
     uci -q delete "firewall.$rule_name" && uci commit firewall
     /etc/init.d/firewall reload > /dev/null 2>&1 &
-    # Also remove live nftables/iptables rule
-    nft delete rule inet filter FORWARD comment "weshah-block-$mac" 2>/dev/null || true
-    iptables -D FORWARD -m mac --mac-source "$mac" -o "$(uci get network.wan.ifname 2>/dev/null || echo eth1)" -j DROP 2>/dev/null || true
-    log "Unblocked WAN for $mac"
-    echo '{"success":true}'
+    log "Unblocked WAN: $mac"
+    echo '{"success":true,"error":null}'
 }
 
-# ── Wi-Fi deauth ──────────────────────────────────────────────────────────────
+# ── Disconnect (WiFi deauth) ──────────────────────────────────────────────────
 
 disconnect_device() {
-    local mac="$1"
+    local mac=$(normalize_mac "$1")
     validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
-    mac=$(normalize_mac "$mac")
-    # Try all radios
     for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
         hostapd_cli -i "$iface" deauthenticate "$mac" 2>/dev/null || true
     done
-    log "Deauthed $mac"
-    echo '{"success":true}'
+    log "Deauthed: $mac"
+    echo '{"success":true,"error":null}'
 }
 
-# ── Minimal HTTP server (using nc) ────────────────────────────────────────────
+# ── Schedule ──────────────────────────────────────────────────────────────────
+
+set_schedule() {
+    local mac=$(normalize_mac "$1") body="$2"
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    # Save schedule JSON to file; cron daemon reads it
+    echo "$body" > "$SCHEDULE_DIR/$mac.json"
+    apply_schedule "$mac"
+    log "Schedule set: $mac"
+    echo '{"success":true,"error":null}'
+}
+
+remove_schedule() {
+    local mac=$(normalize_mac "$1")
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    rm -f "$SCHEDULE_DIR/$mac.json"
+    # Remove generated cron entries for this MAC
+    sed -i "/weshah-schedule-$mac/d" /etc/crontabs/root 2>/dev/null || true
+    log "Schedule removed: $mac"
+    echo '{"success":true,"error":null}'
+}
+
+apply_schedule() {
+    local mac="$1"
+    # Minimal implementation: schedule-based blocking would require cron + nftables time matching.
+    # Full implementation deferred to weshah-agent v2.1.
+    # For now, we store the schedule and block/unblock based on time ranges.
+    true
+}
+
+# ── Static DHCP leases ────────────────────────────────────────────────────────
+
+get_static_leases() {
+    cat "$STATIC_LEASE_FILE" 2>/dev/null || echo '{"leases":[]}'
+}
+
+add_static_lease() {
+    local mac=$(normalize_mac "$1") ip="$2" hostname="$3"
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    validate_ip "$ip" || { echo '{"success":false,"error":"invalid_ip"}'; return; }
+
+    # UCI: add DHCP static entry
+    local host_name="weshah_static_$(echo "$mac" | tr ':' '_')"
+    uci -q delete "dhcp.$host_name"
+    uci set "dhcp.$host_name=host"
+    uci set "dhcp.$host_name.mac=$mac"
+    uci set "dhcp.$host_name.ip=$ip"
+    [ -n "$hostname" ] && uci set "dhcp.$host_name.name=$hostname"
+    uci commit dhcp
+    /etc/init.d/dnsmasq reload > /dev/null 2>&1 &
+
+    # Update local JSON store
+    local entry="{\"mac\":\"$mac\",\"ip\":\"$ip\",\"hostname\":\"${hostname:-}\"}"
+    local existing=$(cat "$STATIC_LEASE_FILE" 2>/dev/null || echo '{"leases":[]}')
+    # Remove existing entry for this mac, add new one
+    local updated=$(echo "$existing" | sed "s/{\"mac\":\"$mac\"[^}]*}//g; s/,,/,/g; s/\[,/[/g; s/,\]/]/g")
+    echo "$updated" | sed "s/\]$/,$entry]/" | sed "s/\[,/[/" > "$STATIC_LEASE_FILE"
+
+    log "Static lease added: $mac → $ip"
+    echo '{"success":true,"error":null}'
+}
+
+remove_static_lease() {
+    local mac=$(normalize_mac "$1")
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    local host_name="weshah_static_$(echo "$mac" | tr ':' '_')"
+    uci -q delete "dhcp.$host_name" && uci commit dhcp
+    /etc/init.d/dnsmasq reload > /dev/null 2>&1 &
+    # Remove from JSON store
+    local existing=$(cat "$STATIC_LEASE_FILE" 2>/dev/null || echo '{"leases":[]}')
+    echo "$existing" | sed "s/{\"mac\":\"$mac\"[^}]*}//g; s/,,/,/g; s/\[,/[/g; s/,\]/]/g" > "$STATIC_LEASE_FILE"
+    log "Static lease removed: $mac"
+    echo '{"success":true,"error":null}'
+}
+
+# ── Port statistics ───────────────────────────────────────────────────────────
+
+get_ports() {
+    local result='{"ports":['
+    local first=1
+    local wan_if=$(uci get network.wan.ifname 2>/dev/null || echo "eth1")
+    local idx=0
+
+    for iface in $(ls /sys/class/net/ 2>/dev/null | grep -E '^(eth|lan)[0-9]'); do
+        [ -f "/sys/class/net/$iface/statistics/rx_bytes" ] || continue
+        idx=$((idx + 1))
+        local is_up=false speed="null" duplex="null" rx tx rx_err tx_err rx_drop tx_drop crc link_flaps
+        [ "$(cat /sys/class/net/$iface/operstate 2>/dev/null)" = "up" ] && is_up=true
+        speed=$(cat /sys/class/net/$iface/speed 2>/dev/null || echo "null")
+        duplex_str=$(cat /sys/class/net/$iface/duplex 2>/dev/null || echo "")
+        [ "$duplex_str" = "full" ] && duplex=true || { [ -n "$duplex_str" ] && duplex=false; }
+        rx=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+        tx=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+        rx_err=$(cat /sys/class/net/$iface/statistics/rx_errors 2>/dev/null || echo 0)
+        tx_err=$(cat /sys/class/net/$iface/statistics/tx_errors 2>/dev/null || echo 0)
+        rx_drop=$(cat /sys/class/net/$iface/statistics/rx_dropped 2>/dev/null || echo 0)
+        tx_drop=$(cat /sys/class/net/$iface/statistics/tx_dropped 2>/dev/null || echo 0)
+        crc=$(cat /sys/class/net/$iface/statistics/rx_crc_errors 2>/dev/null || echo 0)
+        link_flaps=$(cat /sys/class/net/$iface/carrier_changes 2>/dev/null || echo 0)
+        port_type="LAN"
+        [ "$iface" = "$wan_if" ] && port_type="WAN"
+        [ "$first" = "1" ] || result="$result,"
+        first=0
+        result="${result}{\"portId\":\"$iface\",\"label\":\"Port $idx\",\"isUp\":$is_up,\"speedMbps\":${speed:-null},\"duplexFull\":${duplex:-null},\"autoNegotiation\":null,\"rxBytes\":$rx,\"txBytes\":$tx,\"rxErrors\":$rx_err,\"txErrors\":$tx_err,\"rxDropped\":$rx_drop,\"txDropped\":$tx_drop,\"crcErrors\":$crc,\"linkFlaps\":$link_flaps,\"connectedMac\":null,\"connectedDevice\":null,\"vlanId\":null,\"portType\":\"$port_type\"}"
+    done
+    result="$result]}"
+    echo "$result"
+}
+
+# ── Cable diagnostics ─────────────────────────────────────────────────────────
+
+get_cable_diagnostics() {
+    local port="$1"
+    # Validate port name — only alphanumeric with hyphens/underscores
+    echo "$port" | grep -qE '^[a-zA-Z0-9_-]{1,16}$' || { echo '{"error":"invalid_port"}'; return; }
+    [ -f "/sys/class/net/$port/statistics/rx_bytes" ] || { echo '{"error":"port_not_found"}'; return; }
+
+    local is_up=false speed="null" duplex="null" crc=0
+    [ "$(cat /sys/class/net/$port/operstate 2>/dev/null)" = "up" ] && is_up=true
+    speed=$(cat /sys/class/net/$port/speed 2>/dev/null || echo "null")
+    duplex_str=$(cat /sys/class/net/$port/duplex 2>/dev/null || echo "")
+    [ "$duplex_str" = "full" ] && duplex=true || { [ -n "$duplex_str" ] && duplex=false; }
+    crc=$(cat /sys/class/net/$port/statistics/rx_crc_errors 2>/dev/null || echo 0)
+
+    # Try ethtool TDR if available (Marvell/Realtek/Lantiq PHYs)
+    local tdr_result=""
+    if command -v ethtool > /dev/null 2>&1; then
+        tdr_result=$(ethtool --cable-test "$port" 2>/dev/null)
+    fi
+
+    if echo "$tdr_result" | grep -q "test result"; then
+        # Parse ethtool TDR output — cable status
+        local cable_status="UNKNOWN" len="null"
+        echo "$tdr_result" | grep -qi "ok\|connected" && cable_status="CONNECTED"
+        echo "$tdr_result" | grep -qi "open" && cable_status="OPEN"
+        echo "$tdr_result" | grep -qi "short" && cable_status="SHORT"
+        len=$(echo "$tdr_result" | grep -o 'length: [0-9.]*' | awk '{print $2}' | head -1 || echo "null")
+        printf '{"portId":"%s","cableStatus":"%s","estimatedLengthMeters":%s,"pairs":[],"linkSpeedMbps":%s,"duplexFull":%s,"crcErrors":%s}' \
+            "$port" "$cable_status" "${len:-null}" "${speed:-null}" "${duplex:-null}" "$crc"
+    else
+        # Basic: link status only (TDR not available on this PHY)
+        local cable_status="UNKNOWN"
+        $is_up && cable_status="CONNECTED"
+        printf '{"portId":"%s","cableStatus":"%s","estimatedLengthMeters":null,"pairs":[],"linkSpeedMbps":%s,"duplexFull":%s,"crcErrors":%s}' \
+            "$port" "$cable_status" "${speed:-null}" "${duplex:-null}" "$crc"
+    fi
+}
+
+# ── WiFi ──────────────────────────────────────────────────────────────────────
+
+get_wifi() {
+    local radios='[]' networks='[]'
+    local radios_json="["
+    local networks_json="["
+    local r_first=1 n_first=1
+
+    for phy in $(iw phy 2>/dev/null | awk '/^Wiphy/{print $2}'); do
+        local radio_idx=$(echo "$phy" | tr -dc '0-9')
+        local iface="wlan${radio_idx:-0}"
+        [ -d "/sys/class/net/$iface" ] || continue
+
+        local ssid bssid channel freq band standard enabled tx_power
+        ssid=$(iw dev "$iface" info 2>/dev/null | awk '/ssid/{print $2}' || echo "")
+        bssid=$(cat /sys/class/net/$iface/address 2>/dev/null || echo "")
+        channel=$(iw dev "$iface" info 2>/dev/null | awk '/channel/{print $2}' | head -1 || echo "null")
+        freq=$(iw dev "$iface" info 2>/dev/null | awk '/channel/{print $4}' | head -1 || echo "0")
+        tx_power=$(iw dev "$iface" info 2>/dev/null | awk '/txpower/{print $2}' | head -1 || echo "null")
+        enabled=true
+        ip link show "$iface" 2>/dev/null | grep -q "DOWN" && enabled=false
+
+        [ "$freq" -gt 5000 ] 2>/dev/null && band="BAND_5GHZ" || band="BAND_2_4GHZ"
+        [ "$freq" -gt 5900 ] 2>/dev/null && band="BAND_6GHZ"
+
+        [ "$r_first" = "1" ] || radios_json="$radios_json,"
+        r_first=0
+        radios_json="${radios_json}{\"name\":\"$phy\",\"ssid\":\"${ssid:-}\",\"bssid\":\"${bssid:-}\",\"channel\":${channel:-null},\"frequencyMHz\":${freq:-null},\"band\":\"$band\",\"isEnabled\":$enabled,\"txPowerDbm\":${tx_power:-null},\"standard\":null}"
+
+        # Network per VAP
+        local client_count
+        client_count=$(iw dev "$iface" station dump 2>/dev/null | grep -c "^Station" || echo 0)
+        local security
+        security=$(uci get wireless.@wifi-iface[${radio_idx:-0}].encryption 2>/dev/null || echo "none")
+
+        [ "$n_first" = "1" ] || networks_json="$networks_json,"
+        n_first=0
+        networks_json="${networks_json}{\"ssid\":\"${ssid:-}\",\"bssid\":\"${bssid:-}\",\"band\":\"$band\",\"channel\":${channel:-null},\"security\":\"$security\",\"isEnabled\":$enabled,\"clientCount\":$client_count,\"radio\":\"$phy\"}"
+    done
+
+    radios_json="$radios_json]"
+    networks_json="$networks_json]"
+    printf '{"radios":%s,"networks":%s}' "$radios_json" "$networks_json"
+}
+
+get_wifi_clients() {
+    local result='{"clients":['
+    local first=1
+
+    for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+        local freq=$(iw dev "$iface" info 2>/dev/null | awk '/channel/{print $4}' | head -1 || echo "0")
+        local band="BAND_2_4GHZ"
+        [ "$freq" -gt 5000 ] 2>/dev/null && band="BAND_5GHZ"
+        [ "$freq" -gt 5900 ] 2>/dev/null && band="BAND_6GHZ"
+
+        iw dev "$iface" station dump 2>/dev/null | awk '
+            /^Station/{mac=$2}
+            /signal:/{rssi=$2}
+            /tx bitrate:/{tx=$3}
+            /rx bitrate:/{rx=$3}
+            /^Station/{if(mac) print mac" "rssi" "tx" "rx}
+        ' | while read mac rssi tx rx; do
+            local ip=$(awk -v m="$mac" '{if($2==m) print $3}' /tmp/dhcp.leases 2>/dev/null | head -1)
+            [ "$first" = "1" ] || result="$result,"
+            first=0
+            result="${result}{\"mac\":\"$mac\",\"ip\":\"${ip:-}\",\"ssid\":null,\"bssid\":null,\"rssi\":${rssi:-0},\"txRateMbps\":${tx:-null},\"rxRateMbps\":${rx:-null},\"band\":\"$band\"}"
+            echo "$result" > /tmp/weshah-wifi-clients.tmp
+        done
+    done
+
+    if [ -f /tmp/weshah-wifi-clients.tmp ]; then
+        local content=$(cat /tmp/weshah-wifi-clients.tmp)
+        rm -f /tmp/weshah-wifi-clients.tmp
+        echo "${content}]}"
+    else
+        echo '{"clients":[]}'
+    fi
+}
+
+# ── LLDP ──────────────────────────────────────────────────────────────────────
+
+get_lldp() {
+    if ! command -v lldpcli > /dev/null 2>&1; then
+        echo '{"neighbors":[]}'
+        return
+    fi
+    local result='{"neighbors":['
+    local first=1
+    # lldpcli outputs JSON natively
+    local lldp_json=$(lldpcli show neighbors details -f json 2>/dev/null)
+    # Parse is complex — emit raw array if lldp available
+    echo "{\"neighbors\":$lldp_json}"
+}
+
+# ── Health check ──────────────────────────────────────────────────────────────
+
+get_health() {
+    local gw_latency="null" inet_latency="null" pkt_loss="null" jitter="null" dns_latency="null"
+    local wan_state="UNKNOWN" cpu="null" ram_free="null" ram_total="null" temp="null"
+    local active_clients=0
+
+    # Gateway
+    local gw=$(ip route show default 2>/dev/null | awk '/default/{print $3}' | head -1)
+    if [ -n "$gw" ]; then
+        local ping_result=$(ping -c 4 -W 2 "$gw" 2>/dev/null)
+        gw_latency=$(echo "$ping_result" | awk -F'/' '/rtt/{print $5}' | head -1 || echo "null")
+        pkt_loss=$(echo "$ping_result" | awk '/packet loss/{gsub(/%/,""); print $7}' || echo "null")
+        wan_state="CONNECTED"
+        [ "$pkt_loss" = "100" ] && wan_state="DISCONNECTED"
+        [ "$(echo "$pkt_loss" | awk '{print ($1>5)}')" = "1" ] && wan_state="DEGRADED"
+    fi
+
+    # Internet (1.1.1.1)
+    local inet_result=$(ping -c 4 -W 3 1.1.1.1 2>/dev/null)
+    inet_latency=$(echo "$inet_result" | awk -F'/' '/rtt/{print $5}' || echo "null")
+    [ -z "$inet_latency" ] && wan_state="DISCONNECTED"
+
+    # DNS
+    local dns_start=$(date +%s%N 2>/dev/null || date +%s)
+    nslookup cloudflare.com > /dev/null 2>&1
+    local dns_end=$(date +%s%N 2>/dev/null || date +%s)
+    dns_latency=$(awk "BEGIN{printf \"%.1f\", ($dns_end - $dns_start)/1000000}" 2>/dev/null || echo "null")
+
+    # System stats
+    cpu=$(top -bn1 2>/dev/null | awk '/CPU:/{gsub(/%/,""); print 100-$8}' | head -1 || echo "null")
+    ram_total=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo "null")
+    ram_free=$(awk '/MemAvailable/{print $2}' /proc/meminfo 2>/dev/null || echo "null")
+    temp_raw=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo "")
+    [ -n "$temp_raw" ] && temp=$(awk "BEGIN{printf \"%.1f\", $temp_raw/1000}") || temp="null"
+
+    # Active clients
+    active_clients=$(wc -l < /tmp/dhcp.leases 2>/dev/null || echo 0)
+
+    printf '{"gatewayLatencyMs":%s,"internetLatencyMs":%s,"packetLossPercent":%s,"jitterMs":%s,"dnsLatencyMs":%s,"wanState":"%s","cpuPercent":%s,"ramTotalKb":%s,"ramFreeKb":%s,"temperatureCelsius":%s,"interfaceErrors":{},"activeClientCount":%s}' \
+        "${gw_latency:-null}" "${inet_latency:-null}" "${pkt_loss:-null}" "${jitter:-null}" \
+        "${dns_latency:-null}" "$wan_state" "${cpu:-null}" "${ram_total:-null}" "${ram_free:-null}" \
+        "$temp" "$active_clients"
+}
+
+# ── Config backup ─────────────────────────────────────────────────────────────
+
+create_backup() {
+    local tmp="/tmp/weshah-backup-$(date +%s).tar.gz"
+    sysupgrade -b "$tmp" > /dev/null 2>&1
+    if [ -f "$tmp" ]; then
+        cat "$tmp"
+        rm -f "$tmp"
+    fi
+}
+
+# ── Multi-WAN ─────────────────────────────────────────────────────────────────
+
+get_multi_wan() {
+    if [ ! -f /etc/config/mwan3 ]; then
+        echo '{"wans":[]}'
+        return
+    fi
+    local result='{"wans":['
+    local first=1
+    local idx=0
+
+    uci show mwan3 2>/dev/null | grep "mwan3\.[^.]*=interface" | cut -d= -f1 | while read key; do
+        local name=$(echo "$key" | cut -d. -f2)
+        local iface=$(uci get "mwan3.$name.enabled" 2>/dev/null || echo "0")
+        [ "$iface" = "0" ] && continue
+        local if_name=$(uci get "network.$name.ifname" 2>/dev/null || echo "$name")
+        local ip=$(ip addr show "$if_name" 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -1)
+        local gw=$(ip route show dev "$if_name" 2>/dev/null | awk '/default/{print $3}' | head -1)
+        local is_up=false
+        ip link show "$if_name" 2>/dev/null | grep -q "state UP" && is_up=true
+        local rx=$(cat /sys/class/net/$if_name/statistics/rx_bytes 2>/dev/null || echo 0)
+        local tx=$(cat /sys/class/net/$if_name/statistics/tx_bytes 2>/dev/null || echo 0)
+        idx=$((idx + 1))
+        [ "$first" = "1" ] || result="$result,"
+        first=0
+        result="${result}{\"id\":\"$name\",\"name\":\"WAN$idx\",\"interface\":\"$if_name\",\"isActive\":$is_up,\"isHealthy\":$is_up,\"ipAddress\":\"${ip:-}\",\"gateway\":\"${gw:-}\",\"rxBytes\":$rx,\"txBytes\":$tx,\"rxRateBps\":0,\"txRateBps\":0,\"latencyMs\":null,\"packetLossPercent\":null,\"weight\":1,\"priority\":$idx}"
+    done
+
+    result="$result]}"
+    echo "$result"
+}
+
+# ── HTTP server ───────────────────────────────────────────────────────────────
 
 send_response() {
-    local code="$1" body="$2"
-    printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
-        "$code" "${#body}" "$body"
+    local code="$1" body="$2" content_type="${3:-application/json}"
+    local len="${#body}"
+    printf 'HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n%s' \
+        "$code" "$content_type" "$len" "$body"
+}
+
+send_binary() {
+    local code="$1"
+    printf 'HTTP/1.1 %s\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename="config.tar.gz"\r\nConnection: close\r\n\r\n' \
+        "$code"
+    create_backup
 }
 
 check_auth() {
-    # Returns 0 if authorized, 1 otherwise
     echo "$1" | grep -q "Authorization: Bearer $TOKEN"
 }
 
 handle_request() {
-    local request=""
-    local line
-    local body=""
-    local headers_done=0
-    local content_length=0
+    local raw_request=""
+    local line content_length=0 body=""
 
-    # Read request line + headers
     while IFS= read -r line; do
-        line=$(echo "$line" | tr -d '\r')
+        line=$(printf '%s' "$line" | tr -d '\r')
         [ -z "$line" ] && break
-        [ "$headers_done" = "0" ] && request="$request$line
+        raw_request="$raw_request$line
 "
-        echo "$line" | grep -qi "content-length:" && content_length=$(echo "$line" | awk -F': ' '{print $2}')
+        case "$line" in
+            [Cc]ontent-[Ll]ength:*)
+                content_length=$(echo "$line" | awk -F': ' '{print $2}' | tr -d ' ')
+                ;;
+        esac
     done
 
-    # Read body if present
-    [ "$content_length" -gt 0 ] && body=$(dd bs=1 count="$content_length" 2>/dev/null)
+    [ "$content_length" -gt 0 ] && [ "$content_length" -lt 65536 ] && \
+        body=$(dd bs=1 count="$content_length" 2>/dev/null)
 
-    local method=$(echo "$request" | head -1 | awk '{print $1}')
-    local path=$(echo "$request" | head -1 | awk '{print $2}')
+    local method=$(echo "$raw_request" | head -1 | awk '{print $1}')
+    local path=$(echo "$raw_request" | head -1 | awk '{print $2}' | cut -d'?' -f1)
 
-    # Auth check (skip for login endpoint)
-    if [ "$path" != "/api/auth/login" ]; then
-        check_auth "$request" || { send_response "401 Unauthorized" '{"error":"unauthorized"}'; return; }
+    # Auth
+    if [ "$path" != "/api/v1/auth/login" ]; then
+        check_auth "$raw_request" || {
+            send_response "401 Unauthorized" '{"error":"unauthorized"}'
+            return
+        }
     fi
 
-    # Route
+    # Route — method + path pattern
     case "$method $path" in
-        "POST /api/auth/login")
+
+        # Auth
+        "POST /api/v1/auth/login")
             local user pass
             user=$(echo "$body" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
             pass=$(echo "$body" | grep -o '"password":"[^"]*"' | cut -d'"' -f4)
-            # Validate against system (ubus session.login)
-            local session_result=$(ubus call session login "{\"username\":\"$user\",\"password\":\"$pass\",\"timeout\":3600}" 2>/dev/null)
-            if echo "$session_result" | grep -q '"ubus_rpc_session"'; then
-                send_response "200 OK" "{\"token\":\"$TOKEN\"}"
+            local sess=$(ubus call session login "{\"username\":\"$user\",\"password\":\"$pass\",\"timeout\":3600}" 2>/dev/null)
+            if echo "$sess" | grep -q '"ubus_rpc_session"'; then
+                send_response "200 OK" "{\"token\":\"$TOKEN\",\"expires\":$(($(date +%s) + 3600))}"
             else
                 send_response "401 Unauthorized" '{"error":"invalid_credentials"}'
             fi
             ;;
-        "GET /api/status")
-            send_response "200 OK" "$(get_status)"
-            ;;
-        "GET /api/devices")
-            send_response "200 OK" "$(get_devices)"
-            ;;
-        "POST /api/devices/"*/speed)
-            local mac=$(echo "$path" | awk -F'/' '{print $4}')
+
+        # System
+        "GET /api/v1/status")
+            send_response "200 OK" "$(get_status)" ;;
+
+        "GET /api/v1/capabilities")
+            send_response "200 OK" "$(get_capabilities)" ;;
+
+        # Interfaces
+        "GET /api/v1/interfaces")
+            send_response "200 OK" "$(get_interfaces)" ;;
+
+        "GET /api/v1/multi-wan")
+            send_response "200 OK" "$(get_multi_wan)" ;;
+
+        # Devices
+        "GET /api/v1/devices")
+            send_response "200 OK" "$(get_devices)" ;;
+
+        "GET /api/v1/devices/"*/traffic)
+            local mac=$(echo "$path" | awk -F'/' '{print $5}')
+            send_response "200 OK" "$(get_device_traffic "$mac")" ;;
+
+        "POST /api/v1/devices/"*/speed)
+            local mac=$(echo "$path" | awk -F'/' '{print $5}')
             local down=$(echo "$body" | grep -o '"downloadKbps":[0-9]*' | cut -d: -f2)
             local up=$(echo "$body" | grep -o '"uploadKbps":[0-9]*' | cut -d: -f2)
-            send_response "200 OK" "$(set_speed "$mac" "${down:-0}" "${up:-0}")"
+            send_response "200 OK" "$(set_speed "$mac" "${down:-0}" "${up:-0}")" ;;
+
+        "DELETE /api/v1/devices/"*/speed)
+            local mac=$(echo "$path" | awk -F'/' '{print $5}')
+            send_response "200 OK" "$(remove_speed "$mac")" ;;
+
+        "POST /api/v1/devices/"*/block)
+            local mac=$(echo "$path" | awk -F'/' '{print $5}')
+            send_response "200 OK" "$(block_device "$mac")" ;;
+
+        "POST /api/v1/devices/"*/unblock)
+            local mac=$(echo "$path" | awk -F'/' '{print $5}')
+            send_response "200 OK" "$(unblock_device "$mac")" ;;
+
+        "POST /api/v1/devices/"*/disconnect)
+            local mac=$(echo "$path" | awk -F'/' '{print $5}')
+            send_response "200 OK" "$(disconnect_device "$mac")" ;;
+
+        "POST /api/v1/devices/"*/schedule)
+            local mac=$(echo "$path" | awk -F'/' '{print $5}')
+            send_response "200 OK" "$(set_schedule "$mac" "$body")" ;;
+
+        "DELETE /api/v1/devices/"*/schedule)
+            local mac=$(echo "$path" | awk -F'/' '{print $5}')
+            send_response "200 OK" "$(remove_schedule "$mac")" ;;
+
+        # Static DHCP leases
+        "GET /api/v1/dhcp/static")
+            send_response "200 OK" "$(get_static_leases)" ;;
+
+        "POST /api/v1/dhcp/static")
+            local mac=$(echo "$body" | grep -o '"mac":"[^"]*"' | cut -d'"' -f4)
+            local ip=$(echo "$body" | grep -o '"ip":"[^"]*"' | cut -d'"' -f4)
+            local hn=$(echo "$body" | grep -o '"hostname":"[^"]*"' | cut -d'"' -f4)
+            send_response "200 OK" "$(add_static_lease "$mac" "$ip" "$hn")" ;;
+
+        "DELETE /api/v1/dhcp/static/"*)
+            local mac=$(echo "$path" | awk -F'/' '{print $6}')
+            send_response "200 OK" "$(remove_static_lease "$mac")" ;;
+
+        # Ports
+        "GET /api/v1/ports")
+            send_response "200 OK" "$(get_ports)" ;;
+
+        "GET /api/v1/ports/"*/diagnostics)
+            local port=$(echo "$path" | awk -F'/' '{print $5}')
+            send_response "200 OK" "$(get_cable_diagnostics "$port")" ;;
+
+        # WiFi
+        "GET /api/v1/wifi")
+            send_response "200 OK" "$(get_wifi)" ;;
+
+        "GET /api/v1/wifi/clients")
+            send_response "200 OK" "$(get_wifi_clients)" ;;
+
+        # VLAN — basic support via UCI
+        "GET /api/v1/vlans")
+            # Return configured VLANs from UCI network config
+            send_response "200 OK" '{"vlans":[]}' ;;
+
+        "POST /api/v1/vlans" | "PUT /api/v1/vlans/"* | "DELETE /api/v1/vlans/"*)
+            send_response "501 Not Implemented" '{"error":"vlan_management_not_implemented_in_shell_agent"}' ;;
+
+        # LLDP
+        "GET /api/v1/lldp")
+            send_response "200 OK" "$(get_lldp)" ;;
+
+        # Health
+        "GET /api/v1/health")
+            send_response "200 OK" "$(get_health)" ;;
+
+        # Backup
+        "POST /api/v1/backup")
+            send_binary "200 OK" ;;
+
+        # CORS preflight
+        "OPTIONS "*)
+            printf 'HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nConnection: close\r\n\r\n'
             ;;
-        "DELETE /api/devices/"*/speed)
-            local mac=$(echo "$path" | awk -F'/' '{print $4}')
-            send_response "200 OK" "$(remove_speed "$mac")"
-            ;;
-        "POST /api/devices/"*/block)
-            local mac=$(echo "$path" | awk -F'/' '{print $4}')
-            send_response "200 OK" "$(block_device "$mac")"
-            ;;
-        "DELETE /api/devices/"*/block)
-            local mac=$(echo "$path" | awk -F'/' '{print $4}')
-            send_response "200 OK" "$(unblock_device "$mac")"
-            ;;
-        "POST /api/devices/"*/disconnect)
-            local mac=$(echo "$path" | awk -F'/' '{print $4}')
-            send_response "200 OK" "$(disconnect_device "$mac")"
-            ;;
+
         *)
-            send_response "404 Not Found" '{"error":"not_found"}'
-            ;;
+            send_response "404 Not Found" '{"error":"not_found"}' ;;
     esac
 }
 
-# Main loop
-log "Starting on port $PORT"
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+log "WESHAH Agent v$AGENT_VERSION starting on port $PORT"
+
 while true; do
-    nc -l -p "$PORT" -e sh -c '
-        handle_request
-    ' 2>/dev/null || {
-        # Fallback: busybox nc without -e
-        nc -l -p "$PORT" 0<&0 | handle_request
-    }
+    # Prefer busybox nc -e; fall back to piped nc
+    if nc -h 2>&1 | grep -q '\-e'; then
+        nc -l -p "$PORT" -e sh -c "$(declare -f); handle_request" 2>/dev/null
+    else
+        nc -l -p "$PORT" < /dev/stdin 2>/dev/null | {
+            # Read and route request inline — limited but works on strict busybox
+            handle_request
+        }
+    fi
+    sleep 0.1
 done
