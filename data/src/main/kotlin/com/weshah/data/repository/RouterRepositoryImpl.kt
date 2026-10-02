@@ -125,6 +125,12 @@ class RouterRepositoryImpl @Inject constructor(
 
     override suspend fun getStaticLeases() = adapter.getStaticLeases()
 
+    override suspend fun getLldpNeighbors() = adapter.getLldpNeighbors()
+
+    override suspend fun createConfigBackup() = adapter.createConfigBackup()
+
+    override suspend fun restoreConfigBackup(data: ByteArray) = adapter.restoreConfigBackup(data)
+
     fun getTrafficFlow(mac: String): Flow<TrafficSample> = adapter.getClientTrafficFlow(mac)
 
     suspend fun isConnected() = adapter.isConnected()

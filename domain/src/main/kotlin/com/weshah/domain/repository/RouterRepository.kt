@@ -31,6 +31,9 @@ interface RouterRepository {
     suspend fun updateVlan(vlan: com.weshah.core.models.VlanInfo): RouterResult<Unit>
     suspend fun deleteVlan(vlanId: Int): RouterResult<Unit>
     suspend fun getStaticLeases(): RouterResult<List<DhcpLease>>
+    suspend fun getLldpNeighbors(): RouterResult<List<LldpNeighbor>>
+    suspend fun createConfigBackup(): RouterResult<ByteArray>
+    suspend fun restoreConfigBackup(data: ByteArray): RouterResult<Unit>
 }
 
 enum class RouterConnectionState {

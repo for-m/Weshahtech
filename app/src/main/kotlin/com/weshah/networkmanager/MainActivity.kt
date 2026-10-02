@@ -22,15 +22,19 @@ import com.weshah.ui.common.theme.WeshahTheme
 import com.weshah.ui.dashboard.DashboardScreen
 import com.weshah.ui.devices.DevicesScreen
 import com.weshah.ui.devices.DeviceDetailScreen
+import com.weshah.ui.config.ConfigBackupScreen
 import com.weshah.ui.dhcp.DhcpManagerScreen
 import com.weshah.ui.health.NetworkHealthScreen
 import com.weshah.ui.multiwan.MultiWanScreen
 import com.weshah.ui.ports.CableDiagnosticsScreen
 import com.weshah.ui.ports.PortManagerScreen
 import com.weshah.ui.router.RouterConnectScreen
+import com.weshah.ui.subscribers.SubscriberDetailScreen
 import com.weshah.ui.subscribers.SubscribersScreen
+import com.weshah.ui.timeline.NetworkTimelineScreen
 import com.weshah.ui.tools.ToolsScreen
 import com.weshah.ui.settings.SettingsScreen
+import com.weshah.ui.topology.NetworkTopologyScreen
 import com.weshah.ui.vlan.VlanManagerScreen
 import com.weshah.ui.wifi.WifiAnalyzerScreen
 import dagger.hilt.android.AndroidEntryPoint
@@ -53,9 +57,14 @@ private object Routes {
     const val VLAN_MANAGER = "vlan_manager"
     const val DHCP_MANAGER = "dhcp_manager"
     const val MULTI_WAN = "multi_wan"
+    const val TOPOLOGY = "topology"
+    const val TIMELINE = "timeline"
+    const val CONFIG_BACKUP = "config_backup"
+    const val SUBSCRIBER_DETAIL = "subscriber_detail/{subscriberId}"
 
     fun deviceDetail(mac: String) = "device_detail/$mac"
     fun cableDiagnostics(portId: String) = "cable_diagnostics/$portId"
+    fun subscriberDetail(id: String) = "subscriber_detail/$id"
 }
 
 private data class BottomNavItem(
@@ -149,12 +158,25 @@ private fun WeshahNavHost() {
                 RouterConnectScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.SUBSCRIBERS) {
-                SubscribersScreen(onSubscriberClick = { /* TODO: subscriber detail */ })
+                SubscribersScreen(onSubscriberClick = { id -> navController.navigate(Routes.subscriberDetail(id)) })
+            }
+            composable(
+                route = Routes.SUBSCRIBER_DETAIL,
+                arguments = listOf(navArgument("subscriberId") { type = NavType.StringType })
+            ) {
+                SubscriberDetailScreen(onBack = { navController.popBackStack() })
             }
             composable(Routes.TOOLS) {
                 ToolsScreen(
                     onNavigateToPortManager = { navController.navigate(Routes.PORT_MANAGER) },
-                    onNavigateToHealth = { navController.navigate(Routes.NETWORK_HEALTH) }
+                    onNavigateToHealth = { navController.navigate(Routes.NETWORK_HEALTH) },
+                    onNavigateToTopology = { navController.navigate(Routes.TOPOLOGY) },
+                    onNavigateToTimeline = { navController.navigate(Routes.TIMELINE) },
+                    onNavigateToWifi = { navController.navigate(Routes.WIFI_ANALYZER) },
+                    onNavigateToVlan = { navController.navigate(Routes.VLAN_MANAGER) },
+                    onNavigateToDhcp = { navController.navigate(Routes.DHCP_MANAGER) },
+                    onNavigateToMultiWan = { navController.navigate(Routes.MULTI_WAN) },
+                    onNavigateToConfigBackup = { navController.navigate(Routes.CONFIG_BACKUP) }
                 )
             }
             composable(Routes.SETTINGS) {
@@ -189,6 +211,15 @@ private fun WeshahNavHost() {
             }
             composable(Routes.MULTI_WAN) {
                 MultiWanScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.TOPOLOGY) {
+                NetworkTopologyScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.TIMELINE) {
+                NetworkTimelineScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.CONFIG_BACKUP) {
+                ConfigBackupScreen(onBack = { navController.popBackStack() })
             }
         }
     }

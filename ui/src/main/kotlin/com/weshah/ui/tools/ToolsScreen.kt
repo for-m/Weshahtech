@@ -153,6 +153,13 @@ class ToolsViewModel @Inject constructor() : ViewModel() {
 fun ToolsScreen(
     onNavigateToPortManager: () -> Unit = {},
     onNavigateToHealth: () -> Unit = {},
+    onNavigateToTopology: () -> Unit = {},
+    onNavigateToTimeline: () -> Unit = {},
+    onNavigateToWifi: () -> Unit = {},
+    onNavigateToVlan: () -> Unit = {},
+    onNavigateToDhcp: () -> Unit = {},
+    onNavigateToMultiWan: () -> Unit = {},
+    onNavigateToConfigBackup: () -> Unit = {},
     viewModel: ToolsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -165,7 +172,12 @@ fun ToolsScreen(
                 .padding(padding).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            NavigationSection(onNavigateToPortManager, onNavigateToHealth)
+            NavigationSection(
+                onNavigateToPortManager, onNavigateToHealth,
+                onNavigateToTopology, onNavigateToTimeline,
+                onNavigateToWifi, onNavigateToVlan,
+                onNavigateToDhcp, onNavigateToMultiWan, onNavigateToConfigBackup
+            )
             PingTool(state = state, viewModel = viewModel)
             DnsLookupTool(state = state, viewModel = viewModel)
             PortScanTool(state = state, viewModel = viewModel)
@@ -177,21 +189,43 @@ fun ToolsScreen(
 @Composable
 private fun NavigationSection(
     onNavigateToPortManager: () -> Unit,
-    onNavigateToHealth: () -> Unit
+    onNavigateToHealth: () -> Unit,
+    onNavigateToTopology: () -> Unit,
+    onNavigateToTimeline: () -> Unit,
+    onNavigateToWifi: () -> Unit,
+    onNavigateToVlan: () -> Unit,
+    onNavigateToDhcp: () -> Unit,
+    onNavigateToMultiWan: () -> Unit,
+    onNavigateToConfigBackup: () -> Unit
 ) {
     Text("أدوات متقدمة", style = MaterialTheme.typography.labelMedium,
         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
         color = MaterialTheme.colorScheme.primary)
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = onNavigateToPortManager, modifier = Modifier.weight(1f)) {
-            Icon(Icons.Default.SettingsEthernet, null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("المنافذ", style = MaterialTheme.typography.labelMedium)
-        }
-        OutlinedButton(onClick = onNavigateToHealth, modifier = Modifier.weight(1f)) {
-            Icon(Icons.Default.NetworkCheck, null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("صحة الشبكة", style = MaterialTheme.typography.labelMedium)
+    val buttons = listOf(
+        Triple(Icons.Default.SettingsEthernet, "المنافذ", onNavigateToPortManager),
+        Triple(Icons.Default.NetworkCheck, "صحة الشبكة", onNavigateToHealth),
+        Triple(Icons.Default.AccountTree, "الطوبولوجيا", onNavigateToTopology),
+        Triple(Icons.Default.EventNote, "سجل الأحداث", onNavigateToTimeline),
+        Triple(Icons.Default.Wifi, "WiFi", onNavigateToWifi),
+        Triple(Icons.Default.AccountTree, "VLAN", onNavigateToVlan),
+        Triple(Icons.Default.Dns, "DHCP", onNavigateToDhcp),
+        Triple(Icons.Default.MultipleStop, "Multi-WAN", onNavigateToMultiWan),
+        Triple(Icons.Default.Backup, "نسخ احتياطي", onNavigateToConfigBackup),
+    )
+    buttons.chunked(3).forEach { row ->
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            row.forEach { (icon, label, onClick) ->
+                OutlinedButton(onClick = onClick, modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(icon, null, modifier = Modifier.size(16.dp))
+                        Text(label, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            // Fill remaining empty slots in last row
+            repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
         }
     }
 }

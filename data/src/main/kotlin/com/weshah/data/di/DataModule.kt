@@ -7,8 +7,10 @@ import com.weshah.data.database.dao.*
 import com.weshah.data.database.migration.MIGRATION_1_2
 import com.weshah.data.repository.*
 import com.weshah.domain.engine.AlertEngine
+import com.weshah.domain.engine.EventEngine
 import com.weshah.domain.engine.HealthEngine
 import com.weshah.domain.engine.PortEngine
+import com.weshah.domain.engine.TopologyEngine
 import com.weshah.domain.repository.*
 import dagger.Binds
 import dagger.Module
@@ -61,4 +63,10 @@ abstract class RepositoryModule {
 
     @Binds @Singleton
     abstract fun bindHealthEngine(impl: HealthEngineImpl): HealthEngine
+
+    @Binds @Singleton
+    abstract fun bindTopologyEngine(impl: TopologyEngineImpl): TopologyEngine
+
+    @Binds @Singleton
+    abstract fun bindEventEngine(impl: EventEngineImpl): EventEngine
 }
