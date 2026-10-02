@@ -23,6 +23,7 @@ import com.weshah.ui.dashboard.DashboardScreen
 import com.weshah.ui.devices.DevicesScreen
 import com.weshah.ui.devices.DeviceDetailScreen
 import com.weshah.ui.config.ConfigBackupScreen
+import com.weshah.ui.technician.TechnicianModeScreen
 import com.weshah.ui.dhcp.DhcpManagerScreen
 import com.weshah.ui.health.NetworkHealthScreen
 import com.weshah.ui.multiwan.MultiWanScreen
@@ -60,6 +61,7 @@ private object Routes {
     const val TOPOLOGY = "topology"
     const val TIMELINE = "timeline"
     const val CONFIG_BACKUP = "config_backup"
+    const val TECHNICIAN = "technician"
     const val SUBSCRIBER_DETAIL = "subscriber_detail/{subscriberId}"
 
     fun deviceDetail(mac: String) = "device_detail/$mac"
@@ -176,7 +178,8 @@ private fun WeshahNavHost() {
                     onNavigateToVlan = { navController.navigate(Routes.VLAN_MANAGER) },
                     onNavigateToDhcp = { navController.navigate(Routes.DHCP_MANAGER) },
                     onNavigateToMultiWan = { navController.navigate(Routes.MULTI_WAN) },
-                    onNavigateToConfigBackup = { navController.navigate(Routes.CONFIG_BACKUP) }
+                    onNavigateToConfigBackup = { navController.navigate(Routes.CONFIG_BACKUP) },
+                    onNavigateToTechnician = { navController.navigate(Routes.TECHNICIAN) }
                 )
             }
             composable(Routes.SETTINGS) {
@@ -220,6 +223,9 @@ private fun WeshahNavHost() {
             }
             composable(Routes.CONFIG_BACKUP) {
                 ConfigBackupScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.TECHNICIAN) {
+                TechnicianModeScreen(onBack = { navController.popBackStack() })
             }
         }
     }

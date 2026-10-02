@@ -5,6 +5,7 @@ import com.weshah.core.models.SubscriberStatus
 import com.weshah.data.database.dao.NetworkDeviceDao
 import com.weshah.data.database.dao.SubscriberDao
 import com.weshah.data.database.entity.toEntity
+import com.weshah.domain.repository.RouterRepository
 import com.weshah.domain.repository.SubscriberRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -14,7 +15,8 @@ import javax.inject.Singleton
 @Singleton
 class SubscriberRepositoryImpl @Inject constructor(
     private val subscriberDao: SubscriberDao,
-    private val deviceDao: NetworkDeviceDao
+    private val deviceDao: NetworkDeviceDao,
+    private val routerRepository: RouterRepository
 ) : SubscriberRepository {
 
     override fun getAllSubscribers(): Flow<List<Subscriber>> =
@@ -59,8 +61,13 @@ class SubscriberRepositoryImpl @Inject constructor(
     override suspend fun checkAndExpireSubscribers() {
         val now = System.currentTimeMillis()
         val expired = subscriberDao.getExpiredSubscribers(now)
-        expired.forEach { subscriber ->
-            subscriberDao.updateStatus(subscriber.id, SubscriberStatus.EXPIRED.name)
+        expired.forEach { entity ->
+            subscriberDao.updateStatus(entity.id, SubscriberStatus.EXPIRED.name)
+            // Block all MACs on the router so expired subscribers lose internet access
+            val subscriber = entity.toModel()
+            subscriber.macAddresses.forEach { mac ->
+                routerRepository.blockClient(mac, null)
+            }
         }
     }
 }
