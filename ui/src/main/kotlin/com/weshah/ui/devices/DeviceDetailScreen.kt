@@ -45,7 +45,7 @@ class DeviceDetailViewModel @Inject constructor(
     private val routerRepository: RouterRepository
 ) : ViewModel() {
 
-    private val mac: String = checkNotNull(savedStateHandle["mac"])
+    private val mac: String = checkNotNull(savedStateHandle["macAddress"])
     private val _state = MutableStateFlow(DeviceDetailState())
     val state: StateFlow<DeviceDetailState> = _state.asStateFlow()
 

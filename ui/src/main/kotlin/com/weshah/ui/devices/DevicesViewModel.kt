@@ -47,10 +47,10 @@ class DevicesViewModel @Inject constructor(
                             DeviceFilter.ALL -> true
                             DeviceFilter.ONLINE -> device.isOnline
                             DeviceFilter.OFFLINE -> !device.isOnline
-                            DeviceFilter.BLOCKED -> false // requires isBlocked field from entity
+                            DeviceFilter.BLOCKED -> device.isBlocked
                             DeviceFilter.WIFI -> device.connectionType == com.weshah.core.models.ConnectionType.WIFI
                             DeviceFilter.WIRED -> device.connectionType == com.weshah.core.models.ConnectionType.WIRED
-                            DeviceFilter.FAVORITES -> false // requires isFavorite field from entity
+                            DeviceFilter.FAVORITES -> device.isFavorite
                         }
                     }
                     .filter { device ->

@@ -13,6 +13,8 @@ data class NetworkDevice(
     val deviceType: DeviceType,
     val connectionType: ConnectionType,
     val isOnline: Boolean,
+    val isBlocked: Boolean = false,
+    val isFavorite: Boolean = false,
     val firstSeen: Long,               // epoch millis
     val lastSeen: Long,
     val interface_: String?,           // e.g. "br-lan", "wlan0"

@@ -4,146 +4,157 @@ import com.weshah.core.models.*
 import kotlinx.coroutines.flow.Flow
 
 /**
- * RouterAdapter is the central abstraction that decouples the UI and domain
- * logic from any specific router implementation (OpenWrt, MikroTik, AminLink, etc.).
+ * RouterAdapter — central abstraction decoupling the app from any router implementation.
  *
- * All router-specific implementations must implement this interface.
- * The app never calls OpenWrt APIs directly — it always goes through here.
- *
- * Router implementations run on the router itself, not on the phone.
- * The phone is the management UI; the router enforces all policies.
+ * Rules:
+ * - The UI never calls router APIs directly.
+ * - All persistent policies (speed limits, blocks, schedules) are written to the router.
+ * - The phone is the management console; the router enforces all policies.
+ * - Every capability-dependent method MUST check RouterCapabilities before executing.
+ * - Return RouterResult.Error(NOT_SUPPORTED, ...) if the hardware/firmware cannot do it.
  */
 interface RouterAdapter {
 
     // ─── Connection & Auth ────────────────────────────────────────────────────
 
-    /**
-     * Attempt connection to the router. Returns success/failure with reason.
-     * Credentials are passed here but stored securely by the caller (Android Keystore).
-     */
     suspend fun connect(config: RouterConnectionConfig): RouterConnectionResult
-
-    /**
-     * Test if the router is currently reachable and authenticated.
-     */
     suspend fun isConnected(): Boolean
+    suspend fun disconnect()
+
+    // ─── Capability Detection ─────────────────────────────────────────────────
 
     /**
-     * Disconnect and clear session tokens.
+     * Detect what this router hardware/firmware can actually do.
+     * Called once after connect; result is cached for the session.
+     * Never assume — probe the hardware.
      */
-    suspend fun disconnect()
+    suspend fun detectCapabilities(): RouterCapabilities
+
+    /**
+     * Returns the cached capabilities (from last detectCapabilities call).
+     */
+    fun getCapabilities(): RouterCapabilities
 
     // ─── System Info ──────────────────────────────────────────────────────────
 
     suspend fun getSystemInfo(): RouterResult<RouterInfo>
-
-    /**
-     * Continuous stream of router stats (CPU, RAM, temperature, uptime).
-     * Implementations should poll at a reasonable interval (5-10s).
-     */
     fun getSystemStats(): Flow<RouterStats>
 
     // ─── Network Interfaces ───────────────────────────────────────────────────
 
-    suspend fun getInterfaces(): RouterResult<List<com.weshah.core.models.NetworkInterface>>
-
+    suspend fun getInterfaces(): RouterResult<List<NetworkInterface>>
     suspend fun getWanStatus(): RouterResult<WanStatus>
+    suspend fun getMultiWanInterfaces(): RouterResult<List<WanInterface>>
 
     // ─── DHCP & Device Discovery ──────────────────────────────────────────────
 
-    /**
-     * Get DHCP lease table from the router.
-     * This is the most authoritative source of IP↔MAC mappings.
-     */
     suspend fun getDhcpLeases(): RouterResult<List<DhcpLease>>
-
-    /**
-     * Get all currently connected clients (WiFi + wired).
-     */
     suspend fun getConnectedClients(): RouterResult<List<ConnectedClient>>
-
-    /**
-     * Get WiFi station information (signal, rates, associated BSS).
-     */
     suspend fun getWifiClients(): RouterResult<List<WifiClient>>
+
+    // DHCP reservations
+    suspend fun createStaticLease(macAddress: String, ipAddress: String, hostname: String?): RouterResult<Unit>
+    suspend fun removeStaticLease(macAddress: String): RouterResult<Unit>
+    suspend fun getStaticLeases(): RouterResult<List<DhcpLease>>
 
     // ─── Traffic Statistics ───────────────────────────────────────────────────
 
-    /**
-     * Get per-client traffic statistics.
-     * Returns the router's view of cumulative RX/TX bytes per MAC.
-     */
     suspend fun getClientTrafficStats(): RouterResult<List<ClientTrafficStats>>
-
-    /**
-     * Real-time traffic flow for a specific MAC address.
-     * Rate is in bytes/sec. Polls internally; implementation decides interval.
-     */
     fun getClientTrafficFlow(macAddress: String): Flow<TrafficSample>
 
     // ─── Bandwidth Control ────────────────────────────────────────────────────
 
     /**
-     * Apply a speed limit to a device on the router.
-     *
-     * IMPORTANT: This call writes the policy to the router's persistent config.
-     * The limit MUST survive router reboots without the app being open.
-     * Implementations use tc/nftables/HTB or router-native QoS — never rely on
-     * the Android app staying alive.
+     * Persist speed limit on the router. Survives reboot.
+     * Requires RouterCapabilities.bandwidthControl == true.
      */
     suspend fun setClientSpeedLimit(
         macAddress: String,
-        downloadKbps: Long?,   // null = unlimited
-        uploadKbps: Long?      // null = unlimited
+        downloadKbps: Long?,
+        uploadKbps: Long?
     ): RouterResult<Unit>
 
-    /**
-     * Remove all speed limits for a device and restore unlimited access.
-     */
     suspend fun removeClientSpeedLimit(macAddress: String): RouterResult<Unit>
-
-    /**
-     * Get current speed limit for a device (as stored on the router).
-     */
     suspend fun getClientSpeedLimit(macAddress: String): RouterResult<DeviceSpeedLimit?>
 
     // ─── Block / Unblock ──────────────────────────────────────────────────────
 
-    /**
-     * Block a device's internet access (WAN blocked, LAN access preserved).
-     * Policy is persisted on the router.
-     *
-     * @param expiresAt epoch millis; null = permanent block
-     */
     suspend fun blockClient(macAddress: String, expiresAt: Long? = null): RouterResult<Unit>
-
-    /**
-     * Remove internet block for a device.
-     */
     suspend fun unblockClient(macAddress: String): RouterResult<Unit>
-
-    /**
-     * Force-disconnect a device from the network (kick from WiFi association).
-     * This is temporary — the device can reconnect.
-     */
     suspend fun disconnectClient(macAddress: String): RouterResult<Unit>
-
-    /**
-     * Get current block status for a device.
-     */
     suspend fun getClientBlockStatus(macAddress: String): RouterResult<BlockStatus?>
 
-    // ─── DHCP Reservations ────────────────────────────────────────────────────
+    // ─── Schedule ─────────────────────────────────────────────────────────────
 
-    suspend fun createStaticLease(macAddress: String, ipAddress: String, hostname: String?): RouterResult<Unit>
+    suspend fun setClientSchedule(macAddress: String, schedule: AccessSchedule): RouterResult<Unit>
+    suspend fun removeClientSchedule(macAddress: String): RouterResult<Unit>
 
-    suspend fun removeStaticLease(macAddress: String): RouterResult<Unit>
+    // ─── Ethernet Ports ───────────────────────────────────────────────────────
 
-    suspend fun getStaticLeases(): RouterResult<List<DhcpLease>>
+    /**
+     * Get physical Ethernet port statistics.
+     * Requires RouterCapabilities.portStats == true.
+     */
+    suspend fun getPortStats(): RouterResult<List<PortInfo>>
+
+    /**
+     * Get stats for a single port.
+     */
+    suspend fun getPortStat(portId: String): RouterResult<PortInfo>
+
+    /**
+     * Run cable diagnostics on a port.
+     * Returns CableDiagResult with supported=false if hardware cannot do TDR.
+     * Never returns fake length measurements.
+     */
+    suspend fun runCableDiagnostics(portId: String): RouterResult<CableDiagResult>
 
     // ─── WiFi ─────────────────────────────────────────────────────────────────
 
     suspend fun getWifiRadios(): RouterResult<List<WifiRadio>>
+    suspend fun getWifiNetworks(): RouterResult<List<WifiNetwork>>
+
+    // ─── VLAN ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Requires RouterCapabilities.vlanManagement == true.
+     */
+    suspend fun getVlans(): RouterResult<List<VlanInfo>>
+    suspend fun createVlan(vlan: VlanInfo): RouterResult<Unit>
+    suspend fun updateVlan(vlan: VlanInfo): RouterResult<Unit>
+    suspend fun deleteVlan(vlanId: Int): RouterResult<Unit>
+
+    // ─── Topology ─────────────────────────────────────────────────────────────
+
+    /**
+     * Get LLDP neighbors if available.
+     * Requires RouterCapabilities.lldpNeighbors == true.
+     */
+    suspend fun getLldpNeighbors(): RouterResult<List<LldpNeighbor>>
+
+    // ─── Health & Diagnostics ─────────────────────────────────────────────────
+
+    /**
+     * Run a full health check on the router and network.
+     * Returns real measurements only; never synthesized data.
+     */
+    suspend fun runHealthCheck(): RouterResult<NetworkHealthReport>
+
+    // ─── Configuration Backup ─────────────────────────────────────────────────
+
+    /**
+     * Requires RouterCapabilities.configBackup == true.
+     */
+    suspend fun createConfigBackup(): RouterResult<ByteArray>
+    suspend fun restoreConfigBackup(data: ByteArray): RouterResult<Unit>
+
+    // ─── Events ───────────────────────────────────────────────────────────────
+
+    /**
+     * Stream of router-side events (port changes, WAN state, client connects).
+     * Events are pushed or polled depending on what the router supports.
+     */
+    fun getEventStream(): Flow<RouterEvent>
 }
 
 // ─── Result Types ─────────────────────────────────────────────────────────────
@@ -165,26 +176,31 @@ inline fun <T> RouterResult<T>.onError(block: (RouterErrorCode, String) -> Unit)
 
 fun <T> RouterResult<T>.getOrNull(): T? = if (this is RouterResult.Success) data else null
 
+fun <T, R> RouterResult<T>.map(transform: (T) -> R): RouterResult<R> = when (this) {
+    is RouterResult.Success -> RouterResult.Success(transform(data))
+    is RouterResult.Error -> this
+}
+
 enum class RouterErrorCode {
     AUTHENTICATION_FAILED,
     CONNECTION_REFUSED,
     CONNECTION_TIMEOUT,
-    NOT_SUPPORTED,
+    NOT_SUPPORTED,       // Hardware/firmware cannot do this
     PERMISSION_DENIED,
     INVALID_RESPONSE,
     NETWORK_ERROR,
     ROUTER_ERROR,
+    VALIDATION_ERROR,
     UNKNOWN
 }
 
-// ─── Connection Config ────────────────────────────────────────────────────────
+// ─── Connection ───────────────────────────────────────────────────────────────
 
 data class RouterConnectionConfig(
     val ipAddress: String,
     val port: Int = 443,
     val username: String,
     val useHttps: Boolean = true,
-    // Password/token is stored in Android Keystore, referenced by this key
     val credentialKeyAlias: String = "router_credential_${ipAddress.replace(".", "_")}"
 )
 
@@ -199,7 +215,7 @@ data class DhcpLease(
     val macAddress: String,
     val ipAddress: String,
     val hostname: String?,
-    val leaseExpiry: Long?,    // epoch seconds; null = static/permanent
+    val leaseExpiry: Long?,
     val isStatic: Boolean
 )
 
@@ -216,9 +232,9 @@ data class WifiClient(
     val ipAddress: String?,
     val ssid: String?,
     val bssid: String?,
-    val rssi: Int,            // dBm
-    val txRate: Int?,         // Mbps
-    val rxRate: Int?,         // Mbps
+    val rssi: Int,
+    val txRate: Int?,
+    val rxRate: Int?,
     val band: com.weshah.core.models.WiFiBand?
 )
 
@@ -241,7 +257,7 @@ data class RouterStats(
     val ramFreeKb: Long,
     val ramTotalKb: Long,
     val temperatureCelsius: Float?,
-    val uptime: Long,   // seconds
+    val uptime: Long,
     val timestamp: Long
 )
 
@@ -253,7 +269,7 @@ data class BlockStatus(
 )
 
 data class WifiRadio(
-    val name: String,    // e.g. "radio0", "radio1"
+    val name: String,
     val ssid: String?,
     val bssid: String?,
     val channel: Int?,
@@ -261,5 +277,56 @@ data class WifiRadio(
     val band: com.weshah.core.models.WiFiBand?,
     val isEnabled: Boolean,
     val txPowerDbm: Int?,
-    val standard: String?  // e.g. "802.11ax"
+    val standard: String?
 )
+
+data class WifiNetwork(
+    val ssid: String,
+    val bssid: String?,
+    val band: com.weshah.core.models.WiFiBand?,
+    val channel: Int?,
+    val securityMode: String?,
+    val isEnabled: Boolean,
+    val clientCount: Int,
+    val radioName: String
+)
+
+data class LldpNeighbor(
+    val localPort: String,
+    val remoteChassisId: String,
+    val remotePortId: String,
+    val remoteHostname: String?,
+    val remoteDescription: String?,
+    val remoteCaps: List<String>
+)
+
+data class AccessSchedule(
+    val macAddress: String,
+    val allowedTimeRanges: List<TimeRange>,
+    val downloadKbps: Long?,
+    val uploadKbps: Long?
+)
+
+data class TimeRange(
+    val startHour: Int,
+    val startMinute: Int,
+    val endHour: Int,
+    val endMinute: Int,
+    val daysOfWeek: Set<Int>   // 1=Mon … 7=Sun
+)
+
+data class RouterEvent(
+    val timestamp: Long,
+    val type: RouterEventType,
+    val portId: String?,
+    val macAddress: String?,
+    val detail: String?
+)
+
+enum class RouterEventType {
+    PORT_UP, PORT_DOWN, PORT_SPEED_CHANGE,
+    CLIENT_CONNECTED, CLIENT_DISCONNECTED,
+    WAN_UP, WAN_DOWN, WAN_FAILOVER,
+    CONFIG_CHANGED,
+    ROUTER_REBOOT
+}

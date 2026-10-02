@@ -70,8 +70,6 @@ class DashboardViewModel @Inject constructor(
         viewModelScope.launch {
             deviceRepository.getAllDevices().collect { devices ->
                 val online = devices.filter { it.isOnline }
-                val blocked = devices.filter { it.isOnline }
-                    .count { it.associatedSubscriberId == null } // placeholder - use isBlocked from entity
                 val topConsumers = online
                     .sortedByDescending { it.downloadRateBytes + it.uploadRateBytes }
                     .take(5)
@@ -96,11 +94,12 @@ class DashboardViewModel @Inject constructor(
 
     private fun observeRouterStats() {
         viewModelScope.launch {
-            if (routerRepository.connectionState.value == RouterConnectionState.CONNECTED) {
-                routerRepository.getSystemStats().collect { stats ->
+            routerRepository.connectionState
+                .filter { it == RouterConnectionState.CONNECTED }
+                .flatMapLatest { routerRepository.getSystemStats() }
+                .collect { stats ->
                     _uiState.update { it.copy(routerStats = stats) }
                 }
-            }
         }
     }
 

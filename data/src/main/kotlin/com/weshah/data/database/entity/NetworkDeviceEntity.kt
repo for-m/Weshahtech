@@ -42,6 +42,8 @@ data class NetworkDeviceEntity(
         deviceType = runCatching { DeviceType.valueOf(deviceType) }.getOrDefault(DeviceType.UNKNOWN),
         connectionType = runCatching { ConnectionType.valueOf(connectionType) }.getOrDefault(ConnectionType.UNKNOWN),
         isOnline = isOnline,
+        isBlocked = isBlocked,
+        isFavorite = isFavorite,
         firstSeen = firstSeen,
         lastSeen = lastSeen,
         interface_ = interface_,
