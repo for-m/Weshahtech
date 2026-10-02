@@ -22,6 +22,9 @@ interface RouterRepository {
     suspend fun disconnectClient(mac: String): RouterResult<Unit>
     suspend fun createStaticLease(mac: String, ip: String, hostname: String?): RouterResult<Unit>
     suspend fun getWifiRadios(): RouterResult<List<WifiRadio>>
+    suspend fun getPortStats(): RouterResult<List<com.weshah.core.models.PortInfo>>
+    suspend fun runCableDiagnostics(portId: String): RouterResult<com.weshah.core.models.CableDiagResult>
+    suspend fun runHealthCheck(): RouterResult<com.weshah.core.models.NetworkHealthReport>
 }
 
 enum class RouterConnectionState {

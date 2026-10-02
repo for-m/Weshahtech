@@ -12,16 +12,19 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.navigation.NavController
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
+import com.weshah.ui.alerts.AlertsScreen
 import com.weshah.ui.common.theme.WeshahTheme
 import com.weshah.ui.dashboard.DashboardScreen
 import com.weshah.ui.devices.DevicesScreen
 import com.weshah.ui.devices.DeviceDetailScreen
+import com.weshah.ui.health.NetworkHealthScreen
+import com.weshah.ui.ports.CableDiagnosticsScreen
+import com.weshah.ui.ports.PortManagerScreen
 import com.weshah.ui.router.RouterConnectScreen
 import com.weshah.ui.subscribers.SubscribersScreen
 import com.weshah.ui.tools.ToolsScreen
@@ -38,8 +41,13 @@ private object Routes {
     const val SUBSCRIBERS = "subscribers"
     const val TOOLS = "tools"
     const val SETTINGS = "settings"
+    const val ALERTS = "alerts"
+    const val PORT_MANAGER = "port_manager"
+    const val CABLE_DIAGNOSTICS = "cable_diagnostics/{portId}"
+    const val NETWORK_HEALTH = "network_health"
 
     fun deviceDetail(mac: String) = "device_detail/$mac"
+    fun cableDiagnostics(portId: String) = "cable_diagnostics/$portId"
 }
 
 private data class BottomNavItem(
@@ -113,7 +121,9 @@ private fun WeshahNavHost() {
                 DashboardScreen(
                     onNavigateToDevices = { navController.navigate(Routes.DEVICES) },
                     onNavigateToRouter = { navController.navigate(Routes.ROUTER_CONNECT) },
-                    onNavigateToSubscribers = { navController.navigate(Routes.SUBSCRIBERS) }
+                    onNavigateToSubscribers = { navController.navigate(Routes.SUBSCRIBERS) },
+                    onNavigateToAlerts = { navController.navigate(Routes.ALERTS) },
+                    onNavigateToHealth = { navController.navigate(Routes.NETWORK_HEALTH) }
                 )
             }
             composable(Routes.DEVICES) {
@@ -134,10 +144,31 @@ private fun WeshahNavHost() {
                 SubscribersScreen(onSubscriberClick = { /* TODO: subscriber detail */ })
             }
             composable(Routes.TOOLS) {
-                ToolsScreen()
+                ToolsScreen(
+                    onNavigateToPortManager = { navController.navigate(Routes.PORT_MANAGER) },
+                    onNavigateToHealth = { navController.navigate(Routes.NETWORK_HEALTH) }
+                )
             }
             composable(Routes.SETTINGS) {
                 SettingsScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.ALERTS) {
+                AlertsScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.PORT_MANAGER) {
+                PortManagerScreen(
+                    onBack = { navController.popBackStack() },
+                    onRunDiagnostics = { portId -> navController.navigate(Routes.cableDiagnostics(portId)) }
+                )
+            }
+            composable(
+                route = Routes.CABLE_DIAGNOSTICS,
+                arguments = listOf(navArgument("portId") { type = NavType.StringType })
+            ) {
+                CableDiagnosticsScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.NETWORK_HEALTH) {
+                NetworkHealthScreen(onBack = { navController.popBackStack() })
             }
         }
     }

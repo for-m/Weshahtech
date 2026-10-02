@@ -17,6 +17,7 @@ interface DeviceRepository {
     suspend fun upsertDevice(device: NetworkDevice)
     suspend fun updateCustomName(mac: String, name: String)
     suspend fun setFavorite(mac: String, favorite: Boolean)
+    suspend fun setBlocked(mac: String, blocked: Boolean)
     suspend fun markOffline(cutoffMs: Long)
     suspend fun triggerScan()
     fun getTrafficFlow(mac: String): Flow<TrafficSample>

@@ -107,6 +107,12 @@ class RouterRepositoryImpl @Inject constructor(
 
     override suspend fun getWifiRadios() = adapter.getWifiRadios()
 
+    override suspend fun getPortStats() = adapter.getPortStats()
+
+    override suspend fun runCableDiagnostics(portId: String) = adapter.runCableDiagnostics(portId)
+
+    override suspend fun runHealthCheck() = adapter.runHealthCheck()
+
     fun getTrafficFlow(mac: String): Flow<TrafficSample> = adapter.getClientTrafficFlow(mac)
 
     suspend fun isConnected() = adapter.isConnected()

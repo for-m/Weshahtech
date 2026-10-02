@@ -29,6 +29,8 @@ fun DashboardScreen(
     onNavigateToDevices: () -> Unit,
     onNavigateToRouter: () -> Unit,
     onNavigateToSubscribers: () -> Unit,
+    onNavigateToAlerts: () -> Unit = {},
+    onNavigateToHealth: () -> Unit = {},
     viewModel: DashboardViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()

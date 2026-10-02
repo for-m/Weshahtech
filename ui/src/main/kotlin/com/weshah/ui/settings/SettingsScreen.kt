@@ -14,11 +14,12 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.weshah.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -31,15 +32,28 @@ data class SettingsUiState(
 )
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor() : ViewModel() {
+class SettingsViewModel @Inject constructor(
+    private val settings: SettingsRepository
+) : ViewModel() {
 
-    private val _state = MutableStateFlow(SettingsUiState())
-    val state: StateFlow<SettingsUiState> = _state.asStateFlow()
+    val state: StateFlow<SettingsUiState> = combine(
+        settings.autoScanEnabled,
+        settings.scanIntervalMinutes,
+        settings.notificationsEnabled,
+        settings.darkMode
+    ) { autoScan, interval, notif, dark ->
+        SettingsUiState(
+            autoScanEnabled = autoScan,
+            scanIntervalMinutes = interval,
+            notificationsEnabled = notif,
+            darkMode = dark
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, SettingsUiState())
 
-    fun setAutoScan(v: Boolean) = _state.update { it.copy(autoScanEnabled = v) }
-    fun setScanInterval(v: Int) = _state.update { it.copy(scanIntervalMinutes = v) }
-    fun setNotifications(v: Boolean) = _state.update { it.copy(notificationsEnabled = v) }
-    fun setDarkMode(v: Boolean) = _state.update { it.copy(darkMode = v) }
+    fun setAutoScan(v: Boolean) = viewModelScope.launch { settings.setAutoScanEnabled(v) }
+    fun setScanInterval(v: Int) = viewModelScope.launch { settings.setScanIntervalMinutes(v) }
+    fun setNotifications(v: Boolean) = viewModelScope.launch { settings.setNotificationsEnabled(v) }
+    fun setDarkMode(v: Boolean) = viewModelScope.launch { settings.setDarkMode(v) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

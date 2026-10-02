@@ -98,15 +98,19 @@ class DevicesViewModel @Inject constructor(
 
     fun blockDevice(mac: String) {
         viewModelScope.launch {
-            routerRepository.blockClient(mac, null)
-                .onError { _, msg -> _uiState.update { it.copy(error = msg) } }
+            when (val r = routerRepository.blockClient(mac, null)) {
+                is RouterResult.Success -> deviceRepository.setBlocked(mac, true)
+                is RouterResult.Error -> _uiState.update { it.copy(error = r.message) }
+            }
         }
     }
 
     fun unblockDevice(mac: String) {
         viewModelScope.launch {
-            routerRepository.unblockClient(mac)
-                .onError { _, msg -> _uiState.update { it.copy(error = msg) } }
+            when (val r = routerRepository.unblockClient(mac)) {
+                is RouterResult.Success -> deviceRepository.setBlocked(mac, false)
+                is RouterResult.Error -> _uiState.update { it.copy(error = r.message) }
+            }
         }
     }
 

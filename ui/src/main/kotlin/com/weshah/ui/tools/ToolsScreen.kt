@@ -150,7 +150,11 @@ class ToolsViewModel @Inject constructor() : ViewModel() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ToolsScreen(viewModel: ToolsViewModel = hiltViewModel()) {
+fun ToolsScreen(
+    onNavigateToPortManager: () -> Unit = {},
+    onNavigateToHealth: () -> Unit = {},
+    viewModel: ToolsViewModel = hiltViewModel()
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Scaffold(

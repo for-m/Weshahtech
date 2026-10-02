@@ -64,6 +64,10 @@ class DeviceRepositoryImpl @Inject constructor(
         deviceDao.updateFavorite(mac, favorite)
     }
 
+    override suspend fun setBlocked(mac: String, blocked: Boolean) {
+        deviceDao.updateBlocked(mac, blocked)
+    }
+
     override suspend fun markOffline(cutoffMs: Long) {
         deviceDao.markOfflineBeforeTimestamp(cutoffMs)
     }
