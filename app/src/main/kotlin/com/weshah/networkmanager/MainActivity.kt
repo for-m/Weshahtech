@@ -22,13 +22,17 @@ import com.weshah.ui.common.theme.WeshahTheme
 import com.weshah.ui.dashboard.DashboardScreen
 import com.weshah.ui.devices.DevicesScreen
 import com.weshah.ui.devices.DeviceDetailScreen
+import com.weshah.ui.dhcp.DhcpManagerScreen
 import com.weshah.ui.health.NetworkHealthScreen
+import com.weshah.ui.multiwan.MultiWanScreen
 import com.weshah.ui.ports.CableDiagnosticsScreen
 import com.weshah.ui.ports.PortManagerScreen
 import com.weshah.ui.router.RouterConnectScreen
 import com.weshah.ui.subscribers.SubscribersScreen
 import com.weshah.ui.tools.ToolsScreen
 import com.weshah.ui.settings.SettingsScreen
+import com.weshah.ui.vlan.VlanManagerScreen
+import com.weshah.ui.wifi.WifiAnalyzerScreen
 import dagger.hilt.android.AndroidEntryPoint
 
 // ─── Navigation Routes ────────────────────────────────────────────────────────
@@ -45,6 +49,10 @@ private object Routes {
     const val PORT_MANAGER = "port_manager"
     const val CABLE_DIAGNOSTICS = "cable_diagnostics/{portId}"
     const val NETWORK_HEALTH = "network_health"
+    const val WIFI_ANALYZER = "wifi_analyzer"
+    const val VLAN_MANAGER = "vlan_manager"
+    const val DHCP_MANAGER = "dhcp_manager"
+    const val MULTI_WAN = "multi_wan"
 
     fun deviceDetail(mac: String) = "device_detail/$mac"
     fun cableDiagnostics(portId: String) = "cable_diagnostics/$portId"
@@ -169,6 +177,18 @@ private fun WeshahNavHost() {
             }
             composable(Routes.NETWORK_HEALTH) {
                 NetworkHealthScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.WIFI_ANALYZER) {
+                WifiAnalyzerScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.VLAN_MANAGER) {
+                VlanManagerScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.DHCP_MANAGER) {
+                DhcpManagerScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.MULTI_WAN) {
+                MultiWanScreen(onBack = { navController.popBackStack() })
             }
         }
     }

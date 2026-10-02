@@ -25,6 +25,12 @@ interface RouterRepository {
     suspend fun getPortStats(): RouterResult<List<com.weshah.core.models.PortInfo>>
     suspend fun runCableDiagnostics(portId: String): RouterResult<com.weshah.core.models.CableDiagResult>
     suspend fun runHealthCheck(): RouterResult<com.weshah.core.models.NetworkHealthReport>
+    suspend fun getMultiWanInterfaces(): RouterResult<List<com.weshah.core.models.WanInterface>>
+    suspend fun getVlans(): RouterResult<List<com.weshah.core.models.VlanInfo>>
+    suspend fun createVlan(vlan: com.weshah.core.models.VlanInfo): RouterResult<Unit>
+    suspend fun updateVlan(vlan: com.weshah.core.models.VlanInfo): RouterResult<Unit>
+    suspend fun deleteVlan(vlanId: Int): RouterResult<Unit>
+    suspend fun getStaticLeases(): RouterResult<List<DhcpLease>>
 }
 
 enum class RouterConnectionState {

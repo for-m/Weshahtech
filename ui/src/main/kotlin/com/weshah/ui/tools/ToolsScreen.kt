@@ -165,10 +165,33 @@ fun ToolsScreen(
                 .padding(padding).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            NavigationSection(onNavigateToPortManager, onNavigateToHealth)
             PingTool(state = state, viewModel = viewModel)
             DnsLookupTool(state = state, viewModel = viewModel)
             PortScanTool(state = state, viewModel = viewModel)
             TracerouteNotice()
+        }
+    }
+}
+
+@Composable
+private fun NavigationSection(
+    onNavigateToPortManager: () -> Unit,
+    onNavigateToHealth: () -> Unit
+) {
+    Text("أدوات متقدمة", style = MaterialTheme.typography.labelMedium,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary)
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onNavigateToPortManager, modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.SettingsEthernet, null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("المنافذ", style = MaterialTheme.typography.labelMedium)
+        }
+        OutlinedButton(onClick = onNavigateToHealth, modifier = Modifier.weight(1f)) {
+            Icon(Icons.Default.NetworkCheck, null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("صحة الشبكة", style = MaterialTheme.typography.labelMedium)
         }
     }
 }

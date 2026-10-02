@@ -113,6 +113,18 @@ class RouterRepositoryImpl @Inject constructor(
 
     override suspend fun runHealthCheck() = adapter.runHealthCheck()
 
+    override suspend fun getMultiWanInterfaces() = adapter.getMultiWanInterfaces()
+
+    override suspend fun getVlans() = adapter.getVlans()
+
+    override suspend fun createVlan(vlan: com.weshah.core.models.VlanInfo) = adapter.createVlan(vlan)
+
+    override suspend fun updateVlan(vlan: com.weshah.core.models.VlanInfo) = adapter.updateVlan(vlan)
+
+    override suspend fun deleteVlan(vlanId: Int) = adapter.deleteVlan(vlanId)
+
+    override suspend fun getStaticLeases() = adapter.getStaticLeases()
+
     fun getTrafficFlow(mac: String): Flow<TrafficSample> = adapter.getClientTrafficFlow(mac)
 
     suspend fun isConnected() = adapter.isConnected()
