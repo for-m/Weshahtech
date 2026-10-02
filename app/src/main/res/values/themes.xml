@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme — Compose handles Material 3 theming; this is just for the window -->
+    <style name="Theme.Weshah" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#0A0F1E</item>
+        <item name="android:statusBarColor">#0A0F1E</item>
+        <item name="android:navigationBarColor">#0A0F1E</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

@@ -1,0 +1,310 @@
+#!/bin/sh
+# WESHAH Network Manager Agent
+# Lightweight REST API for OpenWrt — exposes device management endpoints
+# so the Android app never runs arbitrary shell commands from user input.
+#
+# Deploy: copy to /usr/sbin/weshah-agent, chmod +x, enable via /etc/init.d/weshah-agent
+# Default port: 8765
+# Auth: Bearer token (set TOKEN in /etc/weshah-agent.conf)
+#
+# Endpoints:
+#   GET  /api/status            — router info, WAN status, CPU/RAM
+#   GET  /api/devices           — all known devices (ARP + DHCP)
+#   GET  /api/devices/{mac}     — single device stats
+#   POST /api/devices/{mac}/speed   — set speed limit (persists via tc+nftables)
+#   DELETE /api/devices/{mac}/speed — remove speed limit
+#   POST /api/devices/{mac}/block   — block internet (WAN only, LAN preserved)
+#   DELETE /api/devices/{mac}/block — unblock
+#   POST /api/devices/{mac}/disconnect — deauth from Wi-Fi
+#   POST /api/auth/login        — exchange credentials for token
+
+CONF="/etc/weshah-agent.conf"
+PORT=8765
+TOKEN=""
+LOG_TAG="weshah-agent"
+
+# Load config
+[ -f "$CONF" ] && . "$CONF"
+
+# Generate token if not set
+if [ -z "$TOKEN" ]; then
+    TOKEN=$(cat /dev/urandom | tr -dc 'A-Za-z0-9' | head -c 32 2>/dev/null || date | md5sum | cut -d' ' -f1)
+    echo "TOKEN=$TOKEN" >> "$CONF"
+fi
+
+log() { logger -t "$LOG_TAG" "$*"; }
+
+# ── Validation helpers ────────────────────────────────────────────────────────
+
+validate_mac() {
+    echo "$1" | grep -qE '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$'
+}
+
+validate_int() {
+    echo "$1" | grep -qE '^[0-9]+$'
+}
+
+normalize_mac() {
+    echo "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# ── Router info ───────────────────────────────────────────────────────────────
+
+get_status() {
+    local uptime cpu ram model firmware wan_ip wan_state
+    uptime=$(cat /proc/uptime | cut -d. -f1)
+    cpu=$(top -bn1 2>/dev/null | grep 'CPU:' | awk '{print $2}' | tr -d '%' || echo "0")
+    ram_total=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    ram_free=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
+    ram_used=$((ram_total - ram_free))
+    model=$(cat /tmp/sysinfo/model 2>/dev/null || uname -m)
+    firmware=$(cat /etc/openwrt_release 2>/dev/null | grep DISTRIB_RELEASE | cut -d= -f2 | tr -d '"' || echo "unknown")
+    kernel=$(uname -r)
+    wan_ip=$(ip route get 1.1.1.1 2>/dev/null | awk '/src/{print $7}' | head -1)
+    wan_if=$(uci get network.wan.ifname 2>/dev/null || echo "eth1")
+    wan_state="up"
+    ip link show "$wan_if" 2>/dev/null | grep -q "state UP" || wan_state="down"
+    load=$(cat /proc/loadavg | awk '{print $1}')
+    temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{printf "%.1f", $1/1000}' || echo "0")
+
+    printf '{"model":"%s","firmware":"%s","kernel":"%s","uptimeSeconds":%s,"cpuPercent":%s,"ramUsedKb":%s,"ramTotalKb":%s,"loadAvg":"%s","temperatureCelsius":%s,"wanIp":"%s","wanState":"%s","agentVersion":"1.0.0"}' \
+        "$model" "$firmware" "$kernel" "$uptime" "$cpu" "$ram_used" "$ram_total" "$load" "$temp" "${wan_ip:-}" "$wan_state"
+}
+
+# ── Device list ───────────────────────────────────────────────────────────────
+
+get_devices() {
+    # Combine DHCP leases + ARP cache
+    local result="["
+    local first=1
+
+    # Read DHCP leases (authoritative for IP-MAC binding)
+    while IFS=' ' read -r expire mac ip hostname _; do
+        validate_mac "$mac" || continue
+        mac=$(normalize_mac "$mac")
+        local is_blocked=false
+        nft list ruleset 2>/dev/null | grep -q "ether saddr $mac drop" && is_blocked=true
+        # Get speed limits from tc if set
+        local speed_down=0 speed_up=0
+        local iface=$(uci get network.br_lan.ifname 2>/dev/null | awk '{print $1}' || echo "br-lan")
+        tc class show dev "$iface" 2>/dev/null | grep -q "$(echo $mac | tr ':' '')" && {
+            speed_down=$(tc class show dev "$iface" 2>/dev/null | grep "$(echo $mac | tr ':' '')" | awk '/rate/{print $NF}' | head -1 || echo 0)
+        }
+        [ "$first" = "1" ] || result="$result,"
+        first=0
+        result="$result{\"mac\":\"$mac\",\"ip\":\"$ip\",\"hostname\":\"${hostname:-}\",\"isOnline\":true,\"isBlocked\":$is_blocked,\"speedDownKbps\":$speed_down,\"speedUpKbps\":$speed_up,\"rxBytes\":0,\"txBytes\":0,\"rxRate\":0,\"txRate\":0}"
+    done < /tmp/dhcp.leases 2>/dev/null
+
+    # Add ARP entries not in DHCP
+    while IFS=' ' read -r ip hw flags mac iface; do
+        [ "$flags" = "0x0" ] && continue
+        validate_mac "$mac" || continue
+        mac=$(normalize_mac "$mac")
+        echo "$result" | grep -q "\"mac\":\"$mac\"" && continue
+        local is_blocked=false
+        nft list ruleset 2>/dev/null | grep -q "ether saddr $mac drop" && is_blocked=true
+        [ "$first" = "1" ] || result="$result,"
+        first=0
+        result="$result{\"mac\":\"$mac\",\"ip\":\"$ip\",\"hostname\":\"\",\"isOnline\":true,\"isBlocked\":$is_blocked,\"speedDownKbps\":0,\"speedUpKbps\":0,\"rxBytes\":0,\"txBytes\":0,\"rxRate\":0,\"txRate\":0}"
+    done < /proc/net/arp 2>/dev/null
+
+    result="$result]"
+    echo "$result"
+}
+
+# ── Speed limit (tc + nftables, persists across reloads via /etc/rc.local) ────
+
+set_speed() {
+    local mac="$1" down_kbps="$2" up_kbps="$3"
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    validate_int "$down_kbps" && validate_int "$up_kbps" || { echo '{"success":false,"error":"invalid_speed"}'; return; }
+    # Range check: max 1Gbps
+    [ "$down_kbps" -gt 1000000 ] || [ "$up_kbps" -gt 1000000 ] && { echo '{"success":false,"error":"speed_out_of_range"}'; return; }
+    mac=$(normalize_mac "$mac")
+    local bridge=$(uci get network.br_lan.ifname 2>/dev/null | awk '{print $1}' || echo "br-lan")
+    local mark=$(printf '%d' "0x$(echo $mac | tr -d ':' | tail -c 4)")
+
+    # Mark packets from this MAC using nftables
+    nft add rule bridge filter FORWARD ether saddr "$mac" meta mark set "$mark" 2>/dev/null || true
+
+    # Apply HTB qdisc on WAN interface for download control (egress = download for LAN client)
+    local wan_if=$(uci get network.wan.ifname 2>/dev/null || echo "eth1")
+    tc qdisc add dev "$wan_if" root handle 1: htb default 999 2>/dev/null || true
+    tc class add dev "$wan_if" parent 1: classid "1:$mark" htb rate "${down_kbps}kbit" ceil "${down_kbps}kbit" 2>/dev/null || \
+    tc class change dev "$wan_if" parent 1: classid "1:$mark" htb rate "${down_kbps}kbit" ceil "${down_kbps}kbit" 2>/dev/null || true
+    tc filter add dev "$wan_if" parent 1: handle "$mark" fw classid "1:$mark" 2>/dev/null || true
+
+    # Upload control on bridge (ingress from LAN client going out WAN)
+    tc qdisc add dev "$bridge" root handle 1: htb default 999 2>/dev/null || true
+    tc class add dev "$bridge" parent 1: classid "1:$mark" htb rate "${up_kbps}kbit" ceil "${up_kbps}kbit" 2>/dev/null || \
+    tc class change dev "$bridge" parent 1: classid "1:$mark" htb rate "${up_kbps}kbit" ceil "${up_kbps}kbit" 2>/dev/null || true
+    tc filter add dev "$bridge" parent 1: handle "$mark" fw classid "1:$mark" 2>/dev/null || true
+
+    log "Speed limit set for $mac: down=${down_kbps}kbps up=${up_kbps}kbps"
+    echo '{"success":true}'
+}
+
+remove_speed() {
+    local mac="$1"
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    mac=$(normalize_mac "$mac")
+    local mark=$(printf '%d' "0x$(echo $mac | tr -d ':' | tail -c 4)")
+    local wan_if=$(uci get network.wan.ifname 2>/dev/null || echo "eth1")
+    local bridge=$(uci get network.br_lan.ifname 2>/dev/null | awk '{print $1}' || echo "br-lan")
+    tc class del dev "$wan_if" parent 1: classid "1:$mark" 2>/dev/null || true
+    tc class del dev "$bridge" parent 1: classid "1:$mark" 2>/dev/null || true
+    log "Speed limit removed for $mac"
+    echo '{"success":true}'
+}
+
+# ── Block / unblock (WAN access only, LAN preserved) ─────────────────────────
+
+block_device() {
+    local mac="$1"
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    mac=$(normalize_mac "$mac")
+    # Block WAN access; LAN traffic is unaffected
+    nft add rule inet filter FORWARD ether saddr "$mac" oifname "$(uci get network.wan.ifname 2>/dev/null || echo eth1)" drop comment "weshah-block-$mac" 2>/dev/null || \
+    iptables -I FORWARD -m mac --mac-source "$mac" -o "$(uci get network.wan.ifname 2>/dev/null || echo eth1)" -j DROP 2>/dev/null || true
+
+    # Persist via UCI firewall rule so it survives reboot
+    local rule_name="weshah_block_$(echo $mac | tr ':' '_')"
+    uci -q delete "firewall.$rule_name" 2>/dev/null
+    uci set "firewall.$rule_name=rule"
+    uci set "firewall.$rule_name.src=lan"
+    uci set "firewall.$rule_name.dest=wan"
+    uci set "firewall.$rule_name.src_mac=$mac"
+    uci set "firewall.$rule_name.target=REJECT"
+    uci set "firewall.$rule_name.name=$rule_name"
+    uci commit firewall
+    /etc/init.d/firewall reload > /dev/null 2>&1 &
+    log "Blocked WAN for $mac"
+    echo '{"success":true}'
+}
+
+unblock_device() {
+    local mac="$1"
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    mac=$(normalize_mac "$mac")
+    local rule_name="weshah_block_$(echo $mac | tr ':' '_')"
+    uci -q delete "firewall.$rule_name" && uci commit firewall
+    /etc/init.d/firewall reload > /dev/null 2>&1 &
+    # Also remove live nftables/iptables rule
+    nft delete rule inet filter FORWARD comment "weshah-block-$mac" 2>/dev/null || true
+    iptables -D FORWARD -m mac --mac-source "$mac" -o "$(uci get network.wan.ifname 2>/dev/null || echo eth1)" -j DROP 2>/dev/null || true
+    log "Unblocked WAN for $mac"
+    echo '{"success":true}'
+}
+
+# ── Wi-Fi deauth ──────────────────────────────────────────────────────────────
+
+disconnect_device() {
+    local mac="$1"
+    validate_mac "$mac" || { echo '{"success":false,"error":"invalid_mac"}'; return; }
+    mac=$(normalize_mac "$mac")
+    # Try all radios
+    for iface in $(iw dev 2>/dev/null | awk '/Interface/{print $2}'); do
+        hostapd_cli -i "$iface" deauthenticate "$mac" 2>/dev/null || true
+    done
+    log "Deauthed $mac"
+    echo '{"success":true}'
+}
+
+# ── Minimal HTTP server (using nc) ────────────────────────────────────────────
+
+send_response() {
+    local code="$1" body="$2"
+    printf 'HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' \
+        "$code" "${#body}" "$body"
+}
+
+check_auth() {
+    # Returns 0 if authorized, 1 otherwise
+    echo "$1" | grep -q "Authorization: Bearer $TOKEN"
+}
+
+handle_request() {
+    local request=""
+    local line
+    local body=""
+    local headers_done=0
+    local content_length=0
+
+    # Read request line + headers
+    while IFS= read -r line; do
+        line=$(echo "$line" | tr -d '\r')
+        [ -z "$line" ] && break
+        [ "$headers_done" = "0" ] && request="$request$line
+"
+        echo "$line" | grep -qi "content-length:" && content_length=$(echo "$line" | awk -F': ' '{print $2}')
+    done
+
+    # Read body if present
+    [ "$content_length" -gt 0 ] && body=$(dd bs=1 count="$content_length" 2>/dev/null)
+
+    local method=$(echo "$request" | head -1 | awk '{print $1}')
+    local path=$(echo "$request" | head -1 | awk '{print $2}')
+
+    # Auth check (skip for login endpoint)
+    if [ "$path" != "/api/auth/login" ]; then
+        check_auth "$request" || { send_response "401 Unauthorized" '{"error":"unauthorized"}'; return; }
+    fi
+
+    # Route
+    case "$method $path" in
+        "POST /api/auth/login")
+            local user pass
+            user=$(echo "$body" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+            pass=$(echo "$body" | grep -o '"password":"[^"]*"' | cut -d'"' -f4)
+            # Validate against system (ubus session.login)
+            local session_result=$(ubus call session login "{\"username\":\"$user\",\"password\":\"$pass\",\"timeout\":3600}" 2>/dev/null)
+            if echo "$session_result" | grep -q '"ubus_rpc_session"'; then
+                send_response "200 OK" "{\"token\":\"$TOKEN\"}"
+            else
+                send_response "401 Unauthorized" '{"error":"invalid_credentials"}'
+            fi
+            ;;
+        "GET /api/status")
+            send_response "200 OK" "$(get_status)"
+            ;;
+        "GET /api/devices")
+            send_response "200 OK" "$(get_devices)"
+            ;;
+        "POST /api/devices/"*/speed)
+            local mac=$(echo "$path" | awk -F'/' '{print $4}')
+            local down=$(echo "$body" | grep -o '"downloadKbps":[0-9]*' | cut -d: -f2)
+            local up=$(echo "$body" | grep -o '"uploadKbps":[0-9]*' | cut -d: -f2)
+            send_response "200 OK" "$(set_speed "$mac" "${down:-0}" "${up:-0}")"
+            ;;
+        "DELETE /api/devices/"*/speed)
+            local mac=$(echo "$path" | awk -F'/' '{print $4}')
+            send_response "200 OK" "$(remove_speed "$mac")"
+            ;;
+        "POST /api/devices/"*/block)
+            local mac=$(echo "$path" | awk -F'/' '{print $4}')
+            send_response "200 OK" "$(block_device "$mac")"
+            ;;
+        "DELETE /api/devices/"*/block)
+            local mac=$(echo "$path" | awk -F'/' '{print $4}')
+            send_response "200 OK" "$(unblock_device "$mac")"
+            ;;
+        "POST /api/devices/"*/disconnect)
+            local mac=$(echo "$path" | awk -F'/' '{print $4}')
+            send_response "200 OK" "$(disconnect_device "$mac")"
+            ;;
+        *)
+            send_response "404 Not Found" '{"error":"not_found"}'
+            ;;
+    esac
+}
+
+# Main loop
+log "Starting on port $PORT"
+while true; do
+    nc -l -p "$PORT" -e sh -c '
+        handle_request
+    ' 2>/dev/null || {
+        # Fallback: busybox nc without -e
+        nc -l -p "$PORT" 0<&0 | handle_request
+    }
+done
