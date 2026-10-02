@@ -161,6 +161,8 @@ fun ToolsScreen(
     onNavigateToMultiWan: () -> Unit = {},
     onNavigateToConfigBackup: () -> Unit = {},
     onNavigateToTechnician: () -> Unit = {},
+    onNavigateToSecurity: () -> Unit = {},
+    onNavigateToNoc: () -> Unit = {},
     viewModel: ToolsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -178,7 +180,7 @@ fun ToolsScreen(
                 onNavigateToTopology, onNavigateToTimeline,
                 onNavigateToWifi, onNavigateToVlan,
                 onNavigateToDhcp, onNavigateToMultiWan, onNavigateToConfigBackup,
-                onNavigateToTechnician
+                onNavigateToTechnician, onNavigateToSecurity, onNavigateToNoc
             )
             PingTool(state = state, viewModel = viewModel)
             DnsLookupTool(state = state, viewModel = viewModel)
@@ -199,7 +201,9 @@ private fun NavigationSection(
     onNavigateToDhcp: () -> Unit,
     onNavigateToMultiWan: () -> Unit,
     onNavigateToConfigBackup: () -> Unit,
-    onNavigateToTechnician: () -> Unit
+    onNavigateToTechnician: () -> Unit,
+    onNavigateToSecurity: () -> Unit,
+    onNavigateToNoc: () -> Unit
 ) {
     Text("أدوات متقدمة", style = MaterialTheme.typography.labelMedium,
         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
@@ -215,6 +219,8 @@ private fun NavigationSection(
         Triple(Icons.Default.MultipleStop, "Multi-WAN", onNavigateToMultiWan),
         Triple(Icons.Default.Backup, "نسخ احتياطي", onNavigateToConfigBackup),
         Triple(Icons.Default.Build, "وضع الفني", onNavigateToTechnician),
+        Triple(Icons.Default.Security, "التدقيق الأمني", onNavigateToSecurity),
+        Triple(Icons.Default.Dashboard, "NOC Dashboard", onNavigateToNoc),
     )
     buttons.chunked(3).forEach { row ->
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

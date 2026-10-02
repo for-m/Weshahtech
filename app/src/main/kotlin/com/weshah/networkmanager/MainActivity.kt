@@ -38,6 +38,8 @@ import com.weshah.ui.settings.SettingsScreen
 import com.weshah.ui.topology.NetworkTopologyScreen
 import com.weshah.ui.vlan.VlanManagerScreen
 import com.weshah.ui.wifi.WifiAnalyzerScreen
+import com.weshah.ui.security.SecurityAuditScreen
+import com.weshah.ui.noc.NocDashboardScreen
 import dagger.hilt.android.AndroidEntryPoint
 
 // ─── Navigation Routes ────────────────────────────────────────────────────────
@@ -63,6 +65,8 @@ private object Routes {
     const val CONFIG_BACKUP = "config_backup"
     const val TECHNICIAN = "technician"
     const val SUBSCRIBER_DETAIL = "subscriber_detail/{subscriberId}"
+    const val SECURITY_AUDIT = "security_audit"
+    const val NOC_DASHBOARD = "noc_dashboard"
 
     fun deviceDetail(mac: String) = "device_detail/$mac"
     fun cableDiagnostics(portId: String) = "cable_diagnostics/$portId"
@@ -179,7 +183,9 @@ private fun WeshahNavHost() {
                     onNavigateToDhcp = { navController.navigate(Routes.DHCP_MANAGER) },
                     onNavigateToMultiWan = { navController.navigate(Routes.MULTI_WAN) },
                     onNavigateToConfigBackup = { navController.navigate(Routes.CONFIG_BACKUP) },
-                    onNavigateToTechnician = { navController.navigate(Routes.TECHNICIAN) }
+                    onNavigateToTechnician = { navController.navigate(Routes.TECHNICIAN) },
+                    onNavigateToSecurity = { navController.navigate(Routes.SECURITY_AUDIT) },
+                    onNavigateToNoc = { navController.navigate(Routes.NOC_DASHBOARD) }
                 )
             }
             composable(Routes.SETTINGS) {
@@ -226,6 +232,19 @@ private fun WeshahNavHost() {
             }
             composable(Routes.TECHNICIAN) {
                 TechnicianModeScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.SECURITY_AUDIT) {
+                SecurityAuditScreen(onBack = { navController.popBackStack() })
+            }
+            composable(Routes.NOC_DASHBOARD) {
+                NocDashboardScreen(
+                    onBack = { navController.popBackStack() },
+                    onNavigateToDevices = { navController.navigate(Routes.DEVICES) },
+                    onNavigateToSubscribers = { navController.navigate(Routes.SUBSCRIBERS) },
+                    onNavigateToAlerts = { navController.navigate(Routes.ALERTS) },
+                    onNavigateToHealth = { navController.navigate(Routes.NETWORK_HEALTH) },
+                    onNavigateToSecurity = { navController.navigate(Routes.SECURITY_AUDIT) }
+                )
             }
         }
     }
