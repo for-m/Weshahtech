@@ -1,0 +1,93 @@
+name: Weshah CI
+
+# Builds the Android app (debug APK), runs every test layer and lints the router agent.
+# The router-side layers run the REAL firmware userland (official OpenWrt 18.06.9 ar71xx/tiny image,
+# MIPS big-endian binaries through qemu-user binfmt) and the REAL kernel (tc/nft/iptables in netns).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: weshah-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck (dash dialect, as BusyBox ash)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          cd weshah-agent/files
+          shellcheck -s dash -S warning -e SC3043,SC1090,SC1091,SC2086,SC2155,SC2034,SC2154,SC2046 -x \
+            usr/lib/weshah-agent/*.sh usr/lib/weshah-agent/www/api usr/libexec/weshah-agent/tick \
+            usr/sbin/weshah-agent-ticker etc/init.d/weshah-agent
+
+  agent-kernel:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables iproute2 iptables busybox-static python3
+      - name: Speed limits and counters on a real kernel (nft + iptables backends)
+        run: sudo weshah-agent/test/host/qos-netns.sh
+
+  agent-firmware-userland:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static squashfs-tools busybox-static jq openssl curl python3 file
+      - name: Official OpenWrt 18.06.9 ar71xx/tiny TL-WR841 v11 image
+        run: |
+          B=https://downloads.openwrt.org/releases/18.06.9/targets/ar71xx/tiny
+          F=openwrt-18.06.9-ar71xx-tiny-tl-wr841-v11-squashfs-factory.bin
+          curl -fsSL -o factory.bin "$B/$F"
+          curl -fsSL "$B/sha256sums" | grep "$F" | cut -d' ' -f1 > official.sha
+          echo "$(cat official.sha)  factory.bin" | sha256sum -c -
+      - name: Extract the rootfs (read-only on the image)
+        run: weshah-agent/test/target/extract-rootfs.sh factory.bin "$RUNNER_TEMP/fw"
+      - name: Agent end-to-end on the firmware userland + Kotlin contract tests against it
+        run: |
+          set -e
+          W="$RUNNER_TEMP/fw"
+          sudo weshah-agent/test/target/setup.sh "$W/rootfs" "$W"
+          sudo weshah-agent/test/target/services.sh start "$W"
+          sudo weshah-agent/test/target/run.sh "$W" | tee agent-e2e.log
+          # reset the router state, then run the Kotlin tests (incl. live contract) against the same agent
+          sudo chroot "$W/testroot" /bin/sh -c 'rm -rf /etc/weshah-agent /tmp/weshah-agent /tmp/.uci; mkdir -p /tmp/weshah-agent; cp /tmp/golden/network /tmp/golden/dhcp /tmp/golden/firewall /etc/config/'
+          cd tools/jvm-harness
+          WESHAH_AGENT_PORT=8765 ../../gradlew --no-daemon test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: agent-e2e-results
+          path: |
+            agent-e2e.log
+            tools/jvm-harness/build/reports/tests
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Debug APK
+        run: ./gradlew --no-daemon :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Weshah-NetworkManager-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-test-reports
+          path: "**/build/reports/tests"

@@ -12,11 +12,11 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 AGENT="$HERE/../.."
 T="$WORK/testroot"
 
-# 1. binfmt for MIPS big-endian (the ABIVERSION byte of MIPS ELF is 1, so it is not matched)
+# 1. binfmt for MIPS big-endian. Always (re)register our own entry: the ABIVERSION byte of MIPS ELF
+#    binaries is 1, which some distro-provided masks do not accept ("Exec format error").
 if [ ! -e /proc/sys/fs/binfmt_misc/status ]; then mount -t binfmt_misc none /proc/sys/fs/binfmt_misc; fi
-if [ ! -e /proc/sys/fs/binfmt_misc/qemu-mips ]; then
-    printf '%s' ':qemu-mips:M::\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08:\xff\xff\xff\xff\xff\xff\xff\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff:/usr/bin/qemu-mips-static:F' > /proc/sys/fs/binfmt_misc/register
-fi
+[ -e /proc/sys/fs/binfmt_misc/qemu-mips ] && echo -1 > /proc/sys/fs/binfmt_misc/qemu-mips
+printf '%s' ':qemu-mips:M::\x7fELF\x01\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x08:\xff\xff\xff\xff\xff\xff\xff\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff:/usr/bin/qemu-mips-static:F' > /proc/sys/fs/binfmt_misc/register
 
 # 2. pristine copy of the firmware userland (never touches $ROOTFS)
 if [ ! -d "$T" ]; then cp -a "$ROOTFS" "$T"; fi
