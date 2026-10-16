@@ -135,7 +135,8 @@ class DeviceRepositoryImpl @Inject constructor(
                     interface_ = null, rssi = null, band = null,
                     uploadRateBytes = 0, downloadRateBytes = 0,
                     totalUploadBytes = 0, totalDownloadBytes = 0,
-                    associatedSubscriberId = null
+                    associatedSubscriberId = null,
+                    speedProfileId = null
                 ))
 
                 // Log new device event

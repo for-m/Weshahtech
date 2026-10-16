@@ -92,6 +92,10 @@ jobs:
       - name: Debug APK
         timeout-minutes: 20
         run: set -o pipefail; ./gradlew --no-daemon --console=plain :app:assembleDebug 2>&1 | tee gradle-apk.log
+      - name: APK build errors (only on failure)
+        if: failure()
+        run: |
+          grep -hE '^e: |FAILED|What went wrong|Error|error:' -A3 gradle-apk.log 2>/dev/null | head -150
       - uses: actions/upload-artifact@v4
         with:
           name: Weshah-NetworkManager-debug-apk
