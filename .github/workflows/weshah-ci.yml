@@ -84,10 +84,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Unit tests
         timeout-minutes: 20
-        run: ./gradlew --no-daemon --console=plain --stacktrace testDebugUnitTest
+        run: set -o pipefail; ./gradlew --no-daemon --console=plain testDebugUnitTest 2>&1 | tee gradle-unit.log
+      - name: Compiler/test errors (only on failure)
+        if: failure()
+        run: grep -hE '^e: |FAILED|What went wrong|tests completed' -A3 gradle-unit.log gradle-apk.log 2>/dev/null | head -150
       - name: Debug APK
         timeout-minutes: 20
-        run: ./gradlew --no-daemon --console=plain --stacktrace :app:assembleDebug
+        run: set -o pipefail; ./gradlew --no-daemon --console=plain :app:assembleDebug 2>&1 | tee gradle-apk.log
       - uses: actions/upload-artifact@v4
         with:
           name: Weshah-NetworkManager-debug-apk
