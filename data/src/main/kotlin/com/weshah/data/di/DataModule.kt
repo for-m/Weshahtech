@@ -12,6 +12,8 @@ import com.weshah.domain.engine.HealthEngine
 import com.weshah.domain.engine.PortEngine
 import com.weshah.domain.engine.TopologyEngine
 import com.weshah.domain.repository.*
+import com.weshah.router.openwrt.CredentialProvider
+import com.weshah.router.openwrt.RouterCredentialManager
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -42,6 +44,9 @@ object DatabaseModule {
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class RepositoryModule {
+
+    @Binds @Singleton
+    abstract fun bindCredentialProvider(impl: RouterCredentialManager): CredentialProvider
 
     @Binds @Singleton
     abstract fun bindDeviceRepository(impl: DeviceRepositoryImpl): DeviceRepository

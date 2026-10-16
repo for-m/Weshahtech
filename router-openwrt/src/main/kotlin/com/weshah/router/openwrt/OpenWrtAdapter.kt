@@ -11,13 +11,18 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
+import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
+import javax.inject.Inject
+import javax.inject.Singleton
 import javax.net.ssl.X509TrustManager
 
 /**
@@ -29,9 +34,17 @@ import javax.net.ssl.X509TrustManager
  * when the hardware or firmware cannot perform the operation.
  * No fake data is ever returned.
  */
-class OpenWrtAdapter(
-    private val credentialManager: RouterCredentialManager
+@Singleton
+class OpenWrtAdapter @Inject constructor(
+    private val credentialManager: CredentialProvider
 ) : RouterAdapter {
+
+    /** Only tests talk to an agent on another port. */
+    constructor(credentialManager: CredentialProvider, agentPort: Int) : this(credentialManager) {
+        this.agentPort = agentPort
+    }
+
+    private var agentPort: Int = DEFAULT_AGENT_PORT
 
     private var baseUrl: String = ""
     private var agentBaseUrl: String = ""
@@ -41,6 +54,7 @@ class OpenWrtAdapter(
     private var config: RouterConnectionConfig? = null
 
     private var _capabilities: RouterCapabilities = RouterCapabilities()
+    private var capabilityReasons: Map<String, String?> = emptyMap()
 
     private lateinit var ubusApi: UbusApiService
     private lateinit var agentApi: WeshahAgentApiService
@@ -67,6 +81,35 @@ class OpenWrtAdapter(
             .build()
     }
 
+    // ─── HTTP result mapping ──────────────────────────────────────────────────
+
+    private fun httpErrorCode(http: Int): RouterErrorCode = when (http) {
+        400 -> RouterErrorCode.VALIDATION_ERROR
+        401, 403 -> RouterErrorCode.AUTHENTICATION_FAILED
+        501 -> RouterErrorCode.NOT_SUPPORTED
+        else -> RouterErrorCode.ROUTER_ERROR
+    }
+
+    /** The agent answers failures with 4xx/5xx and `{"success":false,"error":"..."}`. */
+    private fun errorMessage(response: Response<*>): String {
+        val raw = try { response.errorBody()?.string() } catch (_: Exception) { null }
+        val parsed = raw?.let {
+            try { moshi.adapter(AgentOperationResult::class.java).fromJson(it)?.error } catch (_: Exception) { null }
+        }
+        return parsed ?: raw?.takeIf { it.isNotBlank() }?.take(200) ?: "HTTP ${response.code()}"
+    }
+
+    private fun Response<AgentOperationResult>.toUnit(): RouterResult<Unit> {
+        if (isSuccessful) {
+            val body = body()
+            return if (body?.success == true) RouterResult.Success(Unit)
+            else RouterResult.Error(RouterErrorCode.ROUTER_ERROR, body?.error ?: "Unknown error")
+        }
+        return RouterResult.Error(httpErrorCode(code()), errorMessage(this))
+    }
+
+    private fun auth() = "Bearer $agentToken"
+
     // ─── Connection ───────────────────────────────────────────────────────────
 
     override suspend fun connect(config: RouterConnectionConfig): RouterConnectionResult = withContext(Dispatchers.IO) {
@@ -83,7 +126,7 @@ class OpenWrtAdapter(
         ubusApi = retrofit.create(UbusApiService::class.java)
 
         // Try weshah-agent first
-        agentBaseUrl = "http://${config.ipAddress}:8765/"
+        agentBaseUrl = "http://${config.ipAddress}:$agentPort/"
         val agentRetrofit = Retrofit.Builder()
             .baseUrl(agentBaseUrl)
             .client(httpClient.newBuilder().connectTimeout(3, TimeUnit.SECONDS).build())
@@ -101,6 +144,7 @@ class OpenWrtAdapter(
                 agentToken = agentResult.body()!!.token
                 useAgent = true
                 _capabilities = detectCapabilities()
+                confirmPendingChanges() // reaching the router again is the proof a VLAN change / restore needs
                 return@withContext RouterConnectionResult.Success
             }
         } catch (_: Exception) { /* agent not present, fall through */ }
@@ -126,7 +170,7 @@ class OpenWrtAdapter(
     override suspend fun isConnected(): Boolean = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                agentApi.getStatus("Bearer $agentToken").isSuccessful
+                agentApi.getStatus(auth()).isSuccessful
             } else {
                 ubusApi.call(UbusRequest.call(ubusSessionId, "system", "board", emptyMap())).isSuccessful
             }
@@ -153,7 +197,8 @@ class OpenWrtAdapter(
 
     private suspend fun detectCapabilitiesViaAgent(): RouterCapabilities {
         return try {
-            val caps = agentApi.getCapabilities("Bearer $agentToken").body()
+            val caps = agentApi.getCapabilities(auth()).body()
+            capabilityReasons = caps?.reasons ?: emptyMap()
             RouterCapabilities(
                 weshahAgent = true,
                 agentVersion = caps?.agentVersion,
@@ -168,6 +213,7 @@ class OpenWrtAdapter(
                 dhcpStaticLeases = true,
                 lldpNeighbors = caps?.lldpNeighbors ?: false,
                 configBackup = caps?.configBackup ?: false,
+                configRestore = caps?.configBackup ?: false,
                 hotspot = caps?.hotspot ?: false,
                 temperature = caps?.temperature ?: false,
                 arpTable = true,
@@ -220,7 +266,7 @@ class OpenWrtAdapter(
     override suspend fun getSystemInfo(): RouterResult<RouterInfo> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val status = agentApi.getStatus("Bearer $agentToken").body()
+                val status = agentApi.getStatus(auth()).body()
                     ?: return@withContext RouterResult.Error(RouterErrorCode.INVALID_RESPONSE, "Empty response")
                 RouterResult.Success(status.toRouterInfo(config?.ipAddress ?: ""))
             } else {
@@ -264,7 +310,7 @@ class OpenWrtAdapter(
         while (true) {
             try {
                 if (useAgent) {
-                    val status = agentApi.getStatus("Bearer $agentToken").body()
+                    val status = agentApi.getStatus(auth()).body()
                     if (status != null) {
                         emit(RouterStats(
                             cpuUsagePercent = status.cpuPercent,
@@ -293,7 +339,7 @@ class OpenWrtAdapter(
     override suspend fun getInterfaces(): RouterResult<List<NetworkInterface>> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val ifaces = agentApi.getInterfaces("Bearer $agentToken").body()?.interfaces ?: emptyList()
+                val ifaces = agentApi.getInterfaces(auth()).body()?.interfaces ?: emptyList()
                 RouterResult.Success(ifaces.map { it.toModel() })
             } else {
                 RouterResult.Success(emptyList())
@@ -306,7 +352,7 @@ class OpenWrtAdapter(
     override suspend fun getWanStatus(): RouterResult<WanStatus> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val status = agentApi.getStatus("Bearer $agentToken").body()
+                val status = agentApi.getStatus(auth()).body()
                 RouterResult.Success(WanStatus(
                     isConnected = status?.wanState == "up",
                     ipAddress = status?.wanIp,
@@ -339,7 +385,7 @@ class OpenWrtAdapter(
         }
         try {
             if (useAgent) {
-                val wans = agentApi.getMultiWan("Bearer $agentToken").body()?.wans ?: emptyList()
+                val wans = agentApi.getMultiWan(auth()).body()?.wans ?: emptyList()
                 RouterResult.Success(wans.map { it.toModel() })
             } else {
                 RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Multi-WAN requires weshah-agent")
@@ -354,9 +400,9 @@ class OpenWrtAdapter(
     override suspend fun getDhcpLeases(): RouterResult<List<DhcpLease>> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val devices = agentApi.getDevices("Bearer $agentToken").body() ?: emptyList()
-                RouterResult.Success(devices.map {
-                    DhcpLease(it.mac, it.ip, it.hostname, null, false)
+                val devices = agentApi.getDevices(auth()).body() ?: emptyList()
+                RouterResult.Success(devices.filter { !it.ip.isNullOrEmpty() }.map {
+                    DhcpLease(it.mac, it.ip!!, it.hostname, null, false)
                 })
             } else {
                 val resp = ubusApi.call(UbusRequest.call(ubusSessionId, "luci-rpc", "getDHCPLeases", emptyMap()))
@@ -371,7 +417,7 @@ class OpenWrtAdapter(
     override suspend fun getConnectedClients(): RouterResult<List<ConnectedClient>> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val devices = agentApi.getDevices("Bearer $agentToken").body() ?: emptyList()
+                val devices = agentApi.getDevices(auth()).body() ?: emptyList()
                 RouterResult.Success(devices.filter { it.isOnline }.map {
                     ConnectedClient(it.mac, it.ip, it.hostname, "br-lan", false)
                 })
@@ -386,7 +432,7 @@ class OpenWrtAdapter(
     override suspend fun getWifiClients(): RouterResult<List<WifiClient>> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val clients = agentApi.getWifiClients("Bearer $agentToken").body()?.clients ?: emptyList()
+                val clients = agentApi.getWifiClients(auth()).body()?.clients ?: emptyList()
                 RouterResult.Success(clients.map {
                     WifiClient(it.mac, it.ip, it.ssid, it.bssid, it.rssi, it.txRateMbps, it.rxRateMbps, it.band?.let { b -> WiFiBand.valueOf(b) })
                 })
@@ -405,7 +451,7 @@ class OpenWrtAdapter(
             return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Per-client traffic requires weshah-agent with nlbw/conntrack")
         }
         try {
-            val devices = agentApi.getDevices("Bearer $agentToken").body() ?: emptyList()
+            val devices = agentApi.getDevices(auth()).body() ?: emptyList()
             RouterResult.Success(devices.map {
                 ClientTrafficStats(it.mac, it.rxBytes, it.txBytes, System.currentTimeMillis())
             })
@@ -418,7 +464,7 @@ class OpenWrtAdapter(
         while (true) {
             try {
                 if (useAgent && _capabilities.perClientTraffic) {
-                    val traffic = agentApi.getDeviceTraffic("Bearer $agentToken", macAddress).body()
+                    val traffic = agentApi.getDeviceTraffic(auth(), macAddress).body()
                     if (traffic != null) {
                         emit(TrafficSample(macAddress, traffic.rxRateBps, traffic.txRateBps, System.currentTimeMillis()))
                     }
@@ -432,33 +478,44 @@ class OpenWrtAdapter(
 
     override suspend fun setClientSpeedLimit(macAddress: String, downloadKbps: Long?, uploadKbps: Long?): RouterResult<Unit> = withContext(Dispatchers.IO) {
         if (!_capabilities.bandwidthControl) {
-            return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Bandwidth control requires weshah-agent. Raw ubus cannot apply persistent tc/nftables rules.")
+            val why = if (useAgent) "Speed limits are not supported by this router: ${capabilityReasons["bandwidthControl"] ?: "unknown reason"}"
+                      else "Bandwidth control requires weshah-agent. Raw ubus cannot apply persistent tc/firewall rules."
+            return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, why)
         }
         try {
-            val result = agentApi.setDeviceSpeed("Bearer $agentToken", macAddress,
-                AgentSpeedRequest(downloadKbps ?: 0, uploadKbps ?: 0))
-            if (result.body()?.success == true) RouterResult.Success(Unit)
-            else RouterResult.Error(RouterErrorCode.ROUTER_ERROR, result.body()?.error ?: "Unknown error")
+            agentApi.setDeviceSpeed(auth(), macAddress, AgentSpeedRequest(downloadKbps ?: 0, uploadKbps ?: 0)).toUnit()
         } catch (e: Exception) {
             RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
         }
     }
 
     override suspend fun removeClientSpeedLimit(macAddress: String): RouterResult<Unit> = withContext(Dispatchers.IO) {
-        if (!_capabilities.bandwidthControl) {
+        if (!useAgent) {
             return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Requires weshah-agent")
         }
         try {
-            val result = agentApi.removeDeviceSpeed("Bearer $agentToken", macAddress)
-            if (result.body()?.success == true) RouterResult.Success(Unit)
-            else RouterResult.Error(RouterErrorCode.ROUTER_ERROR, result.body()?.error ?: "Unknown error")
+            agentApi.removeDeviceSpeed(auth(), macAddress).toUnit()
         } catch (e: Exception) {
             RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
         }
     }
 
+    /** Reads the limit the router really holds (null = none). `isActive` is true only when tc has it installed. */
     override suspend fun getClientSpeedLimit(macAddress: String): RouterResult<DeviceSpeedLimit?> = withContext(Dispatchers.IO) {
-        RouterResult.Success(null) // returned from device list; implement if agent exposes endpoint
+        if (!useAgent) return@withContext RouterResult.Success(null)
+        try {
+            val resp = agentApi.getDeviceSpeed(auth(), macAddress)
+            if (!resp.isSuccessful) return@withContext RouterResult.Error(httpErrorCode(resp.code()), errorMessage(resp))
+            val st = resp.body() ?: return@withContext RouterResult.Error(RouterErrorCode.INVALID_RESPONSE, "Empty response")
+            if (st.source == "none") RouterResult.Success(null)
+            else RouterResult.Success(DeviceSpeedLimit(
+                macAddress = st.mac, profileId = "custom",
+                downloadKbps = st.downloadKbps, uploadKbps = st.uploadKbps,
+                appliedAt = st.appliedAt ?: 0L, isActive = st.active && st.applied
+            ))
+        } catch (e: Exception) {
+            RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
+        }
     }
 
     // ─── Block / Unblock ──────────────────────────────────────────────────────
@@ -466,9 +523,7 @@ class OpenWrtAdapter(
     override suspend fun blockClient(macAddress: String, expiresAt: Long?): RouterResult<Unit> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val result = agentApi.blockDevice("Bearer $agentToken", macAddress, AgentBlockRequest(expiresAt))
-                if (result.body()?.success == true) RouterResult.Success(Unit)
-                else RouterResult.Error(RouterErrorCode.ROUTER_ERROR, result.body()?.error ?: "")
+                agentApi.blockDevice(auth(), macAddress, AgentBlockRequest(expiresAt)).toUnit()
             } else {
                 blockClientViaUbus(macAddress)
             }
@@ -501,9 +556,7 @@ class OpenWrtAdapter(
     override suspend fun unblockClient(macAddress: String): RouterResult<Unit> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val result = agentApi.unblockDevice("Bearer $agentToken", macAddress)
-                if (result.body()?.success == true) RouterResult.Success(Unit)
-                else RouterResult.Error(RouterErrorCode.ROUTER_ERROR, result.body()?.error ?: "")
+                agentApi.unblockDevice(auth(), macAddress).toUnit()
             } else {
                 val ruleName = "weshah_block_${macAddress.replace(":", "_")}"
                 ubusApi.call(UbusRequest.call(ubusSessionId, "uci", "delete", mapOf("config" to "firewall.$ruleName")))
@@ -518,8 +571,7 @@ class OpenWrtAdapter(
     override suspend fun disconnectClient(macAddress: String): RouterResult<Unit> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                agentApi.disconnectDevice("Bearer $agentToken", macAddress)
-                RouterResult.Success(Unit)
+                agentApi.disconnectDevice(auth(), macAddress).toUnit()
             } else {
                 RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Deauth requires weshah-agent (hostapd_cli access)")
             }
@@ -528,8 +580,17 @@ class OpenWrtAdapter(
         }
     }
 
+    /** Reads the real firewall state: manual block and/or schedule block. Null only without the agent. */
     override suspend fun getClientBlockStatus(macAddress: String): RouterResult<BlockStatus?> = withContext(Dispatchers.IO) {
-        RouterResult.Success(null)
+        if (!useAgent) return@withContext RouterResult.Success(null)
+        try {
+            val resp = agentApi.getDeviceBlock(auth(), macAddress)
+            if (!resp.isSuccessful) return@withContext RouterResult.Error(httpErrorCode(resp.code()), errorMessage(resp))
+            val st = resp.body() ?: return@withContext RouterResult.Error(RouterErrorCode.INVALID_RESPONSE, "Empty response")
+            RouterResult.Success(BlockStatus(st.mac, st.isBlocked, st.expiresAt, st.ruleId))
+        } catch (e: Exception) {
+            RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
+        }
     }
 
     // ─── Schedule ─────────────────────────────────────────────────────────────
@@ -537,12 +598,10 @@ class OpenWrtAdapter(
     override suspend fun setClientSchedule(macAddress: String, schedule: AccessSchedule): RouterResult<Unit> = withContext(Dispatchers.IO) {
         if (!useAgent) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Schedule requires weshah-agent")
         try {
-            val result = agentApi.setDeviceSchedule("Bearer $agentToken", macAddress,
+            agentApi.setDeviceSchedule(auth(), macAddress,
                 AgentScheduleRequest(schedule.allowedTimeRanges.map {
-                    AgentTimeRange(it.startHour, it.startMinute, it.endHour, it.endMinute, it.daysOfWeek.toList())
-                }, schedule.downloadKbps, schedule.uploadKbps))
-            if (result.body()?.success == true) RouterResult.Success(Unit)
-            else RouterResult.Error(RouterErrorCode.ROUTER_ERROR, result.body()?.error ?: "")
+                    AgentTimeRange(it.startHour, it.startMinute, it.endHour, it.endMinute, it.daysOfWeek.toList().sorted())
+                }, schedule.downloadKbps, schedule.uploadKbps)).toUnit()
         } catch (e: Exception) {
             RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
         }
@@ -551,8 +610,7 @@ class OpenWrtAdapter(
     override suspend fun removeClientSchedule(macAddress: String): RouterResult<Unit> = withContext(Dispatchers.IO) {
         if (!useAgent) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Schedule requires weshah-agent")
         try {
-            agentApi.removeDeviceSchedule("Bearer $agentToken", macAddress)
-            RouterResult.Success(Unit)
+            agentApi.removeDeviceSchedule(auth(), macAddress).toUnit()
         } catch (e: Exception) {
             RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
         }
@@ -566,7 +624,7 @@ class OpenWrtAdapter(
         }
         try {
             if (useAgent) {
-                val ports = agentApi.getPorts("Bearer $agentToken").body()?.ports ?: emptyList()
+                val ports = agentApi.getPorts(auth()).body()?.ports ?: emptyList()
                 RouterResult.Success(ports.map { it.toModel() })
             } else {
                 getPortStatsViaUbus()
@@ -605,8 +663,12 @@ class OpenWrtAdapter(
     }
 
     override suspend fun getPortStat(portId: String): RouterResult<PortInfo> = withContext(Dispatchers.IO) {
-        getPortStats().map { list -> list.firstOrNull { it.portId == portId }
-            ?: return@withContext RouterResult.Error(RouterErrorCode.ROUTER_ERROR, "Port $portId not found") }
+        when (val all = getPortStats()) {
+            is RouterResult.Error -> all
+            is RouterResult.Success -> all.data.firstOrNull { it.portId == portId }
+                ?.let { RouterResult.Success(it) }
+                ?: RouterResult.Error(RouterErrorCode.ROUTER_ERROR, "Port $portId not found")
+        }
     }
 
     override suspend fun runCableDiagnostics(portId: String): RouterResult<CableDiagResult> = withContext(Dispatchers.IO) {
@@ -623,7 +685,7 @@ class OpenWrtAdapter(
         }
         try {
             if (useAgent && _capabilities.cableDiagnosticsTdr) {
-                val result = agentApi.getCableDiagnostics("Bearer $agentToken", portId).body()
+                val result = agentApi.getCableDiagnostics(auth(), portId).body()
                     ?: return@withContext RouterResult.Error(RouterErrorCode.INVALID_RESPONSE, "No response")
                 RouterResult.Success(result.toModel())
             } else {
@@ -650,7 +712,7 @@ class OpenWrtAdapter(
     override suspend fun getWifiRadios(): RouterResult<List<WifiRadio>> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val wifi = agentApi.getWifi("Bearer $agentToken").body()
+                val wifi = agentApi.getWifi(auth()).body()
                 RouterResult.Success(wifi?.radios?.map { r ->
                     WifiRadio(r.name, r.ssid, r.bssid, r.channel, r.frequencyMHz,
                         r.band?.let { WiFiBand.valueOf(it) }, r.isEnabled, r.txPowerDbm, r.standard)
@@ -667,7 +729,7 @@ class OpenWrtAdapter(
     override suspend fun getWifiNetworks(): RouterResult<List<WifiNetwork>> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val wifi = agentApi.getWifi("Bearer $agentToken").body()
+                val wifi = agentApi.getWifi(auth()).body()
                 RouterResult.Success(wifi?.networks?.map { n ->
                     WifiNetwork(n.ssid, n.bssid, n.band?.let { WiFiBand.valueOf(it) },
                         n.channel, n.security, n.isEnabled, n.clientCount, n.radio)
@@ -685,7 +747,7 @@ class OpenWrtAdapter(
     override suspend fun getVlans(): RouterResult<List<VlanInfo>> = withContext(Dispatchers.IO) {
         if (!_capabilities.vlanManagement) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "VLAN management not supported")
         try {
-            val vlans = agentApi.getVlans("Bearer $agentToken").body()?.vlans ?: emptyList()
+            val vlans = agentApi.getVlans(auth()).body()?.vlans ?: emptyList()
             RouterResult.Success(vlans.map { it.toModel() })
         } catch (e: Exception) {
             RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
@@ -694,20 +756,52 @@ class OpenWrtAdapter(
 
     override suspend fun createVlan(vlan: VlanInfo): RouterResult<Unit> = withContext(Dispatchers.IO) {
         if (!_capabilities.vlanManagement) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "VLAN management not supported")
-        try { agentApi.createVlan("Bearer $agentToken", vlan.toAgentModel()); RouterResult.Success(Unit) }
+        try { finishVlanChange(agentApi.createVlan(auth(), vlan.toAgentModel())) }
         catch (e: Exception) { RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e) }
     }
 
     override suspend fun updateVlan(vlan: VlanInfo): RouterResult<Unit> = withContext(Dispatchers.IO) {
         if (!_capabilities.vlanManagement) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "VLAN management not supported")
-        try { agentApi.updateVlan("Bearer $agentToken", vlan.vlanId, vlan.toAgentModel()); RouterResult.Success(Unit) }
+        try { finishVlanChange(agentApi.updateVlan(auth(), vlan.vlanId, vlan.toAgentModel())) }
         catch (e: Exception) { RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e) }
     }
 
     override suspend fun deleteVlan(vlanId: Int): RouterResult<Unit> = withContext(Dispatchers.IO) {
         if (!_capabilities.vlanManagement) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "VLAN management not supported")
-        try { agentApi.deleteVlan("Bearer $agentToken", vlanId); RouterResult.Success(Unit) }
+        try { finishVlanChange(agentApi.deleteVlan(auth(), vlanId)) }
         catch (e: Exception) { RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e) }
+    }
+
+    /**
+     * A VLAN change is applied "commit-confirm": the router restores the previous network
+     * configuration by itself unless we confirm. We confirm only after the agent answers
+     * again, i.e. after the change demonstrably did not cut us off.
+     */
+    private suspend fun finishVlanChange(resp: Response<AgentOperationResult>): RouterResult<Unit> {
+        val applied = resp.toUnit()
+        if (applied is RouterResult.Error) return applied
+        val window = resp.body()?.confirmWithinSeconds ?: return applied
+        if (resp.body()?.confirmRequired != true) return applied
+        val deadline = System.nanoTime() + (window - 10).coerceAtLeast(5) * 1_000_000_000L
+        while (System.nanoTime() < deadline) {
+            try {
+                if (agentApi.getStatus(auth()).isSuccessful) return agentApi.confirmVlanChanges(auth()).toUnit()
+            } catch (_: Exception) { /* network is reloading */ }
+            delay(2_000)
+        }
+        return RouterResult.Error(RouterErrorCode.NETWORK_ERROR,
+            "Router unreachable after the VLAN change; it will restore its previous configuration automatically")
+    }
+
+    override suspend fun confirmPendingChanges(): RouterResult<Unit> = withContext(Dispatchers.IO) {
+        if (!useAgent) return@withContext RouterResult.Success(Unit)
+        try {
+            val vlan = agentApi.confirmVlanChanges(auth()).toUnit()
+            val restore = agentApi.confirmRestore(auth()).toUnit()
+            if (vlan is RouterResult.Error) vlan else restore
+        } catch (e: Exception) {
+            RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
+        }
     }
 
     // ─── Topology ─────────────────────────────────────────────────────────────
@@ -715,7 +809,7 @@ class OpenWrtAdapter(
     override suspend fun getLldpNeighbors(): RouterResult<List<LldpNeighbor>> = withContext(Dispatchers.IO) {
         if (!_capabilities.lldpNeighbors) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "LLDP not enabled on this router")
         try {
-            val neighbors = agentApi.getLldpNeighbors("Bearer $agentToken").body()?.neighbors ?: emptyList()
+            val neighbors = agentApi.getLldpNeighbors(auth()).body()?.neighbors ?: emptyList()
             RouterResult.Success(neighbors.map {
                 LldpNeighbor(it.localPort, it.remoteChassisId, it.remotePortId, it.remoteHostname, it.remoteDescription, it.remoteCaps)
             })
@@ -729,7 +823,7 @@ class OpenWrtAdapter(
     override suspend fun runHealthCheck(): RouterResult<NetworkHealthReport> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val health = agentApi.getHealthCheck("Bearer $agentToken").body()
+                val health = agentApi.getHealthCheck(auth()).body()
                     ?: return@withContext RouterResult.Error(RouterErrorCode.INVALID_RESPONSE, "No health data")
                 RouterResult.Success(health.toModel())
             } else {
@@ -745,7 +839,7 @@ class OpenWrtAdapter(
     override suspend fun createConfigBackup(): RouterResult<ByteArray> = withContext(Dispatchers.IO) {
         if (!_capabilities.configBackup) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Config backup not supported")
         try {
-            val resp = agentApi.createBackup("Bearer $agentToken")
+            val resp = agentApi.createBackup(auth())
             if (resp.isSuccessful) RouterResult.Success(resp.body()?.bytes() ?: byteArrayOf())
             else RouterResult.Error(RouterErrorCode.ROUTER_ERROR, "Backup failed: ${resp.code()}")
         } catch (e: Exception) {
@@ -755,7 +849,22 @@ class OpenWrtAdapter(
 
     override suspend fun restoreConfigBackup(data: ByteArray): RouterResult<Unit> = withContext(Dispatchers.IO) {
         if (!_capabilities.configBackup) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Config restore not supported")
-        RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Restore not yet implemented — do not restore without verification")
+        if (!useAgent) return@withContext RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Restore requires weshah-agent")
+        try {
+            val staged = agentApi.validateRestore(auth(), data.toRequestBody("application/octet-stream".toMediaType()))
+            if (!staged.isSuccessful) return@withContext RouterResult.Error(httpErrorCode(staged.code()), errorMessage(staged))
+            val v = staged.body() ?: return@withContext RouterResult.Error(RouterErrorCode.INVALID_RESPONSE, "Empty validation")
+            if (!v.valid) return@withContext RouterResult.Error(RouterErrorCode.VALIDATION_ERROR, "Backup failed validation")
+            if (v.boardMatch == false) return@withContext RouterResult.Error(RouterErrorCode.VALIDATION_ERROR,
+                "Backup is for ${v.backupBoard}, this router is ${v.routerBoard}")
+            if (!v.hasManifest) return@withContext RouterResult.Error(RouterErrorCode.VALIDATION_ERROR,
+                "Backup has no board manifest (not created by weshah-agent); refusing to restore an unverifiable archive")
+            // reboot=true: the new config only becomes live after a reboot. The router rolls back by itself
+            // unless the app reconnects (connect() confirms), so a bad config cannot strand the router.
+            agentApi.applyRestore(auth(), AgentRestoreApplyRequest(sha256 = v.sha256, allowUnverified = false, reboot = true)).toUnit()
+        } catch (e: Exception) {
+            RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e)
+        }
     }
 
     // ─── Events ───────────────────────────────────────────────────────────────
@@ -801,8 +910,7 @@ class OpenWrtAdapter(
     override suspend fun createStaticLease(macAddress: String, ipAddress: String, hostname: String?): RouterResult<Unit> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                agentApi.createStaticLease("Bearer $agentToken", AgentStaticLeaseRequest(macAddress, ipAddress, hostname))
-                RouterResult.Success(Unit)
+                agentApi.createStaticLease(auth(), AgentStaticLeaseRequest(macAddress, ipAddress, hostname)).toUnit()
             } else {
                 // ubus approach
                 RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Static lease via raw ubus not implemented")
@@ -812,7 +920,7 @@ class OpenWrtAdapter(
 
     override suspend fun removeStaticLease(macAddress: String): RouterResult<Unit> = withContext(Dispatchers.IO) {
         try {
-            if (useAgent) { agentApi.removeStaticLease("Bearer $agentToken", macAddress); RouterResult.Success(Unit) }
+            if (useAgent) agentApi.removeStaticLease(auth(), macAddress).toUnit()
             else RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Requires weshah-agent")
         } catch (e: Exception) { RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e) }
     }
@@ -820,10 +928,14 @@ class OpenWrtAdapter(
     override suspend fun getStaticLeases(): RouterResult<List<DhcpLease>> = withContext(Dispatchers.IO) {
         try {
             if (useAgent) {
-                val leases = agentApi.getStaticLeases("Bearer $agentToken").body()?.leases ?: emptyList()
+                val leases = agentApi.getStaticLeases(auth()).body()?.leases ?: emptyList()
                 RouterResult.Success(leases.map { DhcpLease(it.mac, it.ip, it.hostname, null, true) })
             } else RouterResult.Error(RouterErrorCode.NOT_SUPPORTED, "Requires weshah-agent")
         } catch (e: Exception) { RouterResult.Error(RouterErrorCode.NETWORK_ERROR, e.message ?: "", e) }
+    }
+
+    companion object {
+        const val DEFAULT_AGENT_PORT = 8765
     }
 
     // ─── JSON helpers ─────────────────────────────────────────────────────────

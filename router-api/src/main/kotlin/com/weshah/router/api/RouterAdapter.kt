@@ -148,6 +148,14 @@ interface RouterAdapter {
     suspend fun createConfigBackup(): RouterResult<ByteArray>
     suspend fun restoreConfigBackup(data: ByteArray): RouterResult<Unit>
 
+    // ─── Commit-confirm ───────────────────────────────────────────────────────
+
+    /**
+     * Tells the router that the last VLAN change / config restore left it reachable.
+     * Unconfirmed changes are rolled back by the router itself. Idempotent.
+     */
+    suspend fun confirmPendingChanges(): RouterResult<Unit> = RouterResult.Success(Unit)
+
     // ─── Events ───────────────────────────────────────────────────────────────
 
     /**

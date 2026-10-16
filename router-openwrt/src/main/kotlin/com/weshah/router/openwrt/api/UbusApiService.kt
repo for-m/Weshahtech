@@ -2,6 +2,7 @@ package com.weshah.router.openwrt.api
 
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
+import okhttp3.RequestBody
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.*
@@ -123,6 +124,18 @@ interface WeshahAgentApiService {
         @Body request: AgentSpeedRequest
     ): Response<AgentOperationResult>
 
+    @GET("api/v1/devices/{mac}/speed")
+    suspend fun getDeviceSpeed(
+        @Header("Authorization") authToken: String,
+        @Path("mac") mac: String
+    ): Response<AgentSpeedStatus>
+
+    @GET("api/v1/devices/{mac}/block")
+    suspend fun getDeviceBlock(
+        @Header("Authorization") authToken: String,
+        @Path("mac") mac: String
+    ): Response<AgentBlockStatus>
+
     @DELETE("api/v1/devices/{mac}/speed")
     suspend fun removeDeviceSpeed(
         @Header("Authorization") authToken: String,
@@ -231,6 +244,11 @@ interface WeshahAgentApiService {
         @Path("vlanId") vlanId: Int
     ): Response<AgentOperationResult>
 
+    @POST("api/v1/vlans/confirm")
+    suspend fun confirmVlanChanges(
+        @Header("Authorization") authToken: String
+    ): Response<AgentOperationResult>
+
     // ── Topology ──────────────────────────────────────────────────────────────
 
     @GET("api/v1/lldp")
@@ -251,6 +269,24 @@ interface WeshahAgentApiService {
     suspend fun createBackup(
         @Header("Authorization") authToken: String
     ): Response<ResponseBody>
+
+    // Restore is two steps on purpose: stage + inspect, then apply by sha256.
+    @POST("api/v1/restore/validate")
+    suspend fun validateRestore(
+        @Header("Authorization") authToken: String,
+        @Body archive: RequestBody
+    ): Response<AgentRestoreValidation>
+
+    @POST("api/v1/restore/apply")
+    suspend fun applyRestore(
+        @Header("Authorization") authToken: String,
+        @Body request: AgentRestoreApplyRequest
+    ): Response<AgentOperationResult>
+
+    @POST("api/v1/restore/confirm")
+    suspend fun confirmRestore(
+        @Header("Authorization") authToken: String
+    ): Response<AgentOperationResult>
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -304,7 +340,8 @@ data class AgentCapabilitiesResponse(
     @Json(name = "configBackup") val configBackup: Boolean,
     @Json(name = "hotspot") val hotspot: Boolean,
     @Json(name = "temperature") val temperature: Boolean,
-    @Json(name = "phyDriver") val phyDriver: String?   // matches PhyDriver enum name
+    @Json(name = "phyDriver") val phyDriver: String?,  // matches PhyDriver enum name
+    @Json(name = "reasons") val reasons: Map<String, String?>? = null   // why a capability is false
 )
 
 // ─── Devices ──────────────────────────────────────────────────────────────────
@@ -354,7 +391,54 @@ data class AgentBlockRequest(
 @JsonClass(generateAdapter = true)
 data class AgentOperationResult(
     @Json(name = "success") val success: Boolean,
-    @Json(name = "error") val error: String?
+    @Json(name = "error") val error: String? = null,
+    @Json(name = "note") val note: String? = null,
+    @Json(name = "confirmRequired") val confirmRequired: Boolean = false,
+    @Json(name = "confirmWithinSeconds") val confirmWithinSeconds: Int? = null,
+    @Json(name = "rebootRequired") val rebootRequired: Boolean = false,
+    @Json(name = "rebootScheduled") val rebootScheduled: Boolean = false,
+    @Json(name = "snapshot") val snapshot: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class AgentSpeedStatus(
+    @Json(name = "mac") val mac: String,
+    @Json(name = "source") val source: String,            // "manual" | "schedule" | "none"
+    @Json(name = "downloadKbps") val downloadKbps: Long?,
+    @Json(name = "uploadKbps") val uploadKbps: Long?,
+    @Json(name = "active") val active: Boolean,
+    @Json(name = "applied") val applied: Boolean,         // present in tc, not just stored
+    @Json(name = "reason") val reason: String?,
+    @Json(name = "appliedAt") val appliedAt: Long?
+)
+
+@JsonClass(generateAdapter = true)
+data class AgentBlockStatus(
+    @Json(name = "mac") val mac: String,
+    @Json(name = "isBlocked") val isBlocked: Boolean,
+    @Json(name = "manual") val manual: Boolean,
+    @Json(name = "scheduled") val scheduled: Boolean,
+    @Json(name = "expiresAt") val expiresAt: Long?,       // epoch ms
+    @Json(name = "ruleId") val ruleId: String?
+)
+
+@JsonClass(generateAdapter = true)
+data class AgentRestoreValidation(
+    @Json(name = "valid") val valid: Boolean,
+    @Json(name = "sha256") val sha256: String,
+    @Json(name = "files") val files: Int,
+    @Json(name = "hasManifest") val hasManifest: Boolean,
+    @Json(name = "boardMatch") val boardMatch: Boolean?,  // null = backup carries no board manifest
+    @Json(name = "backupBoard") val backupBoard: String?,
+    @Json(name = "routerBoard") val routerBoard: String?,
+    @Json(name = "warnings") val warnings: List<String> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class AgentRestoreApplyRequest(
+    @Json(name = "sha256") val sha256: String,
+    @Json(name = "allowUnverified") val allowUnverified: Boolean = false,
+    @Json(name = "reboot") val reboot: Boolean = true
 )
 
 // ─── Schedule ─────────────────────────────────────────────────────────────────

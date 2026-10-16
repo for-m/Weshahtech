@@ -25,7 +25,7 @@ import javax.inject.Singleton
 @Singleton
 class RouterCredentialManager @Inject constructor(
     @ApplicationContext private val context: Context
-) {
+) : CredentialProvider {
     companion object {
         private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
         private const val KEY_ALIAS = "weshah_router_cred_key"
@@ -53,7 +53,7 @@ class RouterCredentialManager @Inject constructor(
         }
     }
 
-    fun getCredential(keyAlias: String): String? {
+    override fun getCredential(keyAlias: String): String? {
         return try {
             val encoded = prefs.getString(keyAlias, null) ?: return null
             val combined = Base64.decode(encoded, Base64.DEFAULT)
