@@ -11,6 +11,9 @@ import com.weshah.core.utils.OuiDatabase
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import timber.log.Timber
 import java.net.*
 import java.nio.ByteOrder

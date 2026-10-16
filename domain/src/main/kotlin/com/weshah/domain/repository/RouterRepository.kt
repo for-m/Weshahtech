@@ -1,6 +1,7 @@
 package com.weshah.domain.repository
 
 import com.weshah.core.models.RouterInfo
+import com.weshah.core.models.WanStatus
 import com.weshah.router.api.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
