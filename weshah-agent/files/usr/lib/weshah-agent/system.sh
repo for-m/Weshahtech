@@ -83,10 +83,12 @@ get_capabilities() {
 # ── interfaces ────────────────────────────────────────────────────────────────
 
 get_interfaces() {
-    local lan wan first=1 i st rx tx mac ip4 t
+    local lan wan first=1 i p st rx tx mac ip4 t
     lan=$(lan_dev); wan=$(wan_dev)
     printf '{"interfaces":['
-    for i in $(ls "$SYS_NET" 2>/dev/null); do
+    for p in "$SYS_NET"/*; do
+        [ -e "$p" ] || continue
+        i=${p##*/}
         if [ "$i" = lo ]; then t=LOOPBACK
         elif [ "$i" = "$wan" ]; then t=WAN
         elif [ "$i" = "$lan" ]; then t=LAN
@@ -110,7 +112,16 @@ get_interfaces() {
 # Netdev ports (DSA lanN/wan, ethN). On swconfig routers the physical switch
 # ports are not netdevs; their link state is read with `swconfig ... get link`.
 
-phys_ports() { ls "$SYS_NET" 2>/dev/null | grep -E '^(eth[0-9]+|lan[0-9]*|wan[0-9]*|sfp[0-9]*|port[0-9]+)$'; }
+phys_ports() {
+    local p i
+    for p in "$SYS_NET"/*; do
+        [ -e "$p" ] || continue
+        i=${p##*/}
+        case "$i" in
+            eth[0-9]*|lan|lan[0-9]*|wan|wan[0-9]*|sfp[0-9]*|port[0-9]*) case "$i" in *.*) ;; *) echo "$i" ;; esac ;;
+        esac
+    done
+}
 
 get_ports() {
     local first=1 i n=0 wan up speed duplex rx tx rxe txe rxd txd crc flaps ptype sw link

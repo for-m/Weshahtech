@@ -24,13 +24,19 @@ qos_unsupported_reason() {
     [ "$(fw_backend)" = none ] && { echo "no_firewall_backend"; return; }
     k=$(uname -r)
     for m in sch_htb cls_u32; do
-        if ! { [ -d "/sys/module/$m" ] || ls /lib/modules/"$k"/"$m".ko >/dev/null 2>&1 \
-               || zcat /proc/config.gz 2>/dev/null | grep -qi "^CONFIG_$(printf '%s' "$m" | tr 'a-z' 'A-Z' | sed 's/^SCH_/NET_SCH_/; s/^CLS_/NET_CLS_/')=[ym]"; }; then
-            echo "kernel_module_missing:$m"; return
-        fi
+        qos_kernel_has "$m" "$k" || { echo "kernel_module_missing:$m"; return; }
     done
     [ "$(uci -q get firewall.@defaults[0].flow_offloading)" = 1 ] && { echo "flow_offloading_enabled"; return; }
     return 0
+}
+
+# true when the kernel has <module> built in, loaded, or available as a (possibly compressed) .ko
+qos_kernel_has() { # <module> <kernel release>
+    local m="$1" k="$2" opt
+    [ -d "/sys/module/$m" ] && return 0
+    [ -n "$(find "/lib/modules/$k" -name "$m.ko*" 2>/dev/null | head -n 1)" ] && return 0
+    opt="CONFIG_$(printf '%s' "$m" | tr 'a-z' 'A-Z' | sed 's/^SCH_/NET_SCH_/; s/^CLS_/NET_CLS_/')"
+    zcat /proc/config.gz 2>/dev/null | grep -q "^$opt=[ym]"
 }
 
 qos_supported() { [ -z "$(qos_unsupported_reason)" ]; }
