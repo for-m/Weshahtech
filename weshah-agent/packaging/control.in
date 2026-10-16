@@ -1,0 +1,10 @@
+Package: weshah-agent
+Version: 2.1.0-1
+Depends: libc, uhttpd, jsonfilter, jshn, uci, ubus, rpcd, iw
+Source: https://github.com/for-m/Weshahtech/tree/main/weshah-agent
+Section: net
+Priority: optional
+Maintainer: Wishah Technology
+Architecture: all
+Installed-Size: @SIZE@
+Description: Weshah router management agent. REST API (uhttpd CGI, LAN only) for the Weshah Network Manager app: devices, block, schedules, VLAN, verified backup/restore, counters.

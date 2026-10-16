@@ -37,6 +37,8 @@ dependencies {
     ksp(libs.hilt.compiler)
     implementation(libs.accompanist.permissions)
     implementation(libs.vico.compose.m3)
+    implementation(libs.coroutines.core)
+    implementation(libs.coroutines.android)
     implementation(libs.timber)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

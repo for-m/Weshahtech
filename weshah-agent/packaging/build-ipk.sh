@@ -10,18 +10,7 @@ T=$(mktemp -d)
 mkdir -p "$T/control" "$T/data"
 cp -a "$STAGE/." "$T/data/"
 SIZE=$(cd "$T/data" && find . -type f -exec cat {} + | wc -c)
-cat > "$T/control/control" <<EOT
-Package: weshah-agent
-Version: $VER
-Depends: libc, uhttpd, jsonfilter, jshn, uci, ubus, rpcd, iw
-Source: https://github.com/for-m/Weshahtech/tree/main/weshah-agent
-Section: net
-Priority: optional
-Maintainer: Wishah Technology
-Architecture: all
-Installed-Size: $SIZE
-Description: Weshah router management agent. REST API (uhttpd CGI, LAN only) for the Weshah Network Manager app: devices, block, schedules, VLAN, verified backup/restore, counters.
-EOT
+sed "s/@SIZE@/$SIZE/" "$(dirname "$0")/control.in" > "$T/control/control"
 printf '/etc/weshah-agent.conf\n' > "$T/control/conffiles"
 cat > "$T/control/postinst" <<'EOT'
 #!/bin/sh
