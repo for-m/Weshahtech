@@ -234,7 +234,7 @@ private fun AddVlanDialog(
     val vlanId = vlanIdText.toIntOrNull()
     val vlanIdError = vlanId == null || vlanId !in 2..4094
     val nameError = name.isBlank()
-    val gatewayError = gateway.isNotBlank() && !IpUtils.isValidIp(gateway)
+    val gatewayError = gateway.isNotBlank() && !IpUtils.isValidIpv4(gateway)
 
     AlertDialog(
         onDismissRequest = onDismiss,

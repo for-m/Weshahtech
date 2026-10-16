@@ -1,5 +1,7 @@
 package com.weshah.ui.dashboard
 
+import com.weshah.router.api.onSuccess
+import com.weshah.router.api.onError
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.weshah.core.models.NetworkDevice
@@ -8,7 +10,7 @@ import com.weshah.domain.repository.DeviceRepository
 import com.weshah.domain.repository.RouterConnectionState
 import com.weshah.domain.repository.RouterRepository
 import com.weshah.router.api.RouterStats
-import com.weshah.router.api.WanStatus
+import com.weshah.core.models.WanStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch

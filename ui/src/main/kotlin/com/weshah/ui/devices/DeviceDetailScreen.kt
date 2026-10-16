@@ -1,5 +1,8 @@
 package com.weshah.ui.devices
 
+import com.weshah.router.api.onSuccess
+import com.weshah.router.api.onError
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -385,8 +388,10 @@ private fun SpeedLimitDialog(onConfirm: (SpeedProfile) -> Unit, onDismiss: () ->
                         RadioButton(selected = selected == profile, onClick = { selected = profile })
                         Text(buildString {
                             append(profile.name)
-                            if (profile.downloadKbps != null)
-                                append("  (${profile.downloadKbps / 1024} Mbps ↓ / ${profile.uploadKbps!! / 1024} Mbps ↑)")
+                            val down = profile.downloadKbps
+                            val up = profile.uploadKbps
+                            if (down != null && up != null)
+                                append("  (${down / 1024} Mbps ↓ / ${up / 1024} Mbps ↑)")
                         }, style = MaterialTheme.typography.bodyMedium)
                     }
                 }

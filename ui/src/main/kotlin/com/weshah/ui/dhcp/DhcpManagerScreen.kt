@@ -194,7 +194,7 @@ private fun AddLeaseDialog(
     var hostname by remember { mutableStateOf("") }
 
     val macError = mac.isNotBlank() && !MacUtils.isValid(mac)
-    val ipError = ip.isNotBlank() && !IpUtils.isValidIp(ip)
+    val ipError = ip.isNotBlank() && !IpUtils.isValidIpv4(ip)
     val canConfirm = mac.isNotBlank() && !macError && ip.isNotBlank() && !ipError
 
     AlertDialog(

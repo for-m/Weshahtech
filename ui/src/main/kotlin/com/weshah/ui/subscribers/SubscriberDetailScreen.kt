@@ -299,8 +299,10 @@ private fun SpeedProfileSelector(selectedId: String, onSelect: (String) -> Unit)
                 ) {
                     Column {
                         Text(profile.name, style = MaterialTheme.typography.bodyMedium)
-                        val sub = if (profile.downloadKbps == null) "بلا حدود"
-                                  else "${profile.downloadKbps / 1024} Mbps↓  ${profile.uploadKbps!! / 1024} Mbps↑"
+                        val pDown = profile.downloadKbps
+                        val pUp = profile.uploadKbps
+                        val sub = if (pDown == null || pUp == null) "بلا حدود"
+                                  else "${pDown / 1024} Mbps↓  ${pUp / 1024} Mbps↑"
                         Text(sub, style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }

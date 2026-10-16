@@ -69,19 +69,6 @@ fun StatCard(
 }
 
 @Composable
-fun StatusIndicator(
-    isOnline: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier.size(8.dp),
-        shape = MaterialTheme.shapes.extraSmall,
-        color = if (isOnline) com.weshah.ui.common.theme.WeshahStatusColors.Online
-                else com.weshah.ui.common.theme.WeshahStatusColors.Offline
-    ) {}
-}
-
-@Composable
 fun SectionHeader(
     title: String,
     action: @Composable (() -> Unit)? = null,

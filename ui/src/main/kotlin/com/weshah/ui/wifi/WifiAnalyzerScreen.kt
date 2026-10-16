@@ -136,8 +136,8 @@ private fun RadioList(radios: List<WifiRadio>) {
 @Composable
 private fun RadioCard(radio: WifiRadio) {
     val bandColor = when (radio.band) {
-        WiFiBand.GHZ_5 -> Color(0xFF6366F1)
-        WiFiBand.GHZ_2_4 -> Color(0xFF22C55E)
+        WiFiBand.BAND_5GHZ -> Color(0xFF6366F1)
+        WiFiBand.BAND_2_4GHZ -> Color(0xFF22C55E)
         else -> MaterialTheme.colorScheme.primary
     }
     Card(modifier = Modifier.fillMaxWidth()) {

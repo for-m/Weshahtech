@@ -214,8 +214,10 @@ private fun RouterResourcesCard(report: NetworkHealthReport) {
                             fontWeight = FontWeight.Bold, color = color)
                     }
                 }
-                if (report.routerRamFreeKb != null && report.routerRamTotalKb != null && report.routerRamTotalKb > 0) {
-                    val usedPercent = 100f * (report.routerRamTotalKb - report.routerRamFreeKb) / report.routerRamTotalKb
+                val ramFree = report.routerRamFreeKb
+                val ramTotal = report.routerRamTotalKb
+                if (ramFree != null && ramTotal != null && ramTotal > 0) {
+                    val usedPercent = 100f * (ramTotal - ramFree) / ramTotal
                     val ramColor = if (usedPercent > 85) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("RAM", style = MaterialTheme.typography.labelSmall,

@@ -1,5 +1,6 @@
 package com.weshah.ui.technician
 
+import java.net.InetAddress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -452,11 +453,12 @@ private fun StepRow(step: DiagStep, isActive: Boolean) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("${step.id}. ${step.title}",
                     style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
-                step.detail?.let { d ->
-                    Text(d, style = MaterialTheme.typography.labelSmall,
+                val detailText = step.detail
+                if (detailText != null) {
+                    Text(detailText, style = MaterialTheme.typography.labelSmall,
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } ?: if (step.state == StepState.PENDING) {
+                } else if (step.state == StepState.PENDING) {
                     Text(step.description, style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

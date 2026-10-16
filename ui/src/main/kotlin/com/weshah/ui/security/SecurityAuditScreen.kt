@@ -148,7 +148,7 @@ class SecurityAuditViewModel @Inject constructor(
             // 5. Port errors from router port stats
             when (val portResult = routerRepository.getPortStats()) {
                 is RouterResult.Success -> {
-                    val portsWithErrors = portResult.data.filter { it.errors > 0 }
+                    val portsWithErrors = portResult.data.filter { it.rxErrors + it.txErrors + it.crcErrors > 0 }
                     if (portsWithErrors.isNotEmpty()) {
                         findings.add(AuditFinding(
                             id = "port_errors",
@@ -183,7 +183,7 @@ class SecurityAuditViewModel @Inject constructor(
                             title = "عملاء WiFi بإشارة ضعيفة جداً",
                             detail = "${weakSignal.size} جهاز WiFi بقوة إشارة ≤ -80 dBm. قد يكون مصدر إشارة بعيداً أو طاقة إرسال غير طبيعية.",
                             severity = AuditSeverity.LOW,
-                            icon = Icons.Default.SignalWifi1Bar,
+                            icon = Icons.Default.Wifi,
                             affectedCount = weakSignal.size
                         ))
                     }

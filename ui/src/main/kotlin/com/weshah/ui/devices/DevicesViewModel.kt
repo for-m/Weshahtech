@@ -1,5 +1,7 @@
 package com.weshah.ui.devices
 
+import com.weshah.router.api.onSuccess
+import com.weshah.router.api.onError
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.weshah.core.models.NetworkDevice
