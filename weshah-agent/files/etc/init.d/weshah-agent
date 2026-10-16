@@ -9,12 +9,19 @@ CONF=/etc/weshah-agent.conf
 WWW=/usr/lib/weshah-agent/www
 
 ensure_conf() {
+    local gen
     [ -f "$CONF" ] || printf 'PORT=8765\nTOKEN=\n' > "$CONF"
     chmod 600 "$CONF"
     # shellcheck disable=SC1090
     . "$CONF"
     if [ "${#TOKEN}" -lt 32 ]; then
-        TOKEN=$(head -c 64 /dev/urandom | md5sum | cut -d' ' -f1)$(head -c 64 /dev/urandom | md5sum | cut -d' ' -f1)
+        # 256 bits from the kernel RNG. Never fall back to something guessable: refuse to start instead.
+        gen=$(head -c 32 /dev/urandom 2>/dev/null | hexdump -v -e '/1 "%02x"' 2>/dev/null)
+        if [ "${#gen}" -ne 64 ]; then
+            logger -t weshah-agent "cannot read /dev/urandom: refusing to start without a secret token"
+            return 1
+        fi
+        TOKEN="$gen"
         grep -v '^TOKEN=' "$CONF" > "$CONF.new"
         echo "TOKEN=$TOKEN" >> "$CONF.new"
         chmod 600 "$CONF.new"
@@ -25,7 +32,7 @@ ensure_conf() {
 
 start_service() {
     local lanip
-    ensure_conf
+    ensure_conf || return 1
     mkdir -p /etc/weshah-agent /tmp/weshah-agent
     lanip=$(uci -q get network.lan.ipaddr)
     lanip=${lanip%%/*}

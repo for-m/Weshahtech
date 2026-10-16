@@ -410,5 +410,20 @@ ok "service really is the firmware's uhttpd (MIPS)" sh -c "file '$T/usr/sbin/uht
 ok "agent scripts run under BusyBox ash, not bash" sh -c "chroot '$T' readlink /bin/sh | grep -q busybox"
 ok "no secrets in the process list / syslog of the request path (token not logged)" sh -c "! chroot '$T' logread 2>/dev/null | grep -q '$TOKEN'"
 
+echo; echo "=== 13. first-boot token provisioning (init script)"
+cat > "$T/tmp/token.sh" <<'EOT'
+eval "$(sed -n '/^ensure_conf()/,/^}/p' /etc/init.d/weshah-agent)"
+CONF=/tmp/tok.conf; rm -f /tmp/tok.conf /tmp/tok.conf.new
+ensure_conf; echo "rc1=$?"; t1=$(sed -n 's/^TOKEN=//p' /tmp/tok.conf); echo "len=${#t1}"; echo "mode=$(ls -l /tmp/tok.conf | cut -c1-10)"
+ensure_conf; t2=$(sed -n 's/^TOKEN=//p' /tmp/tok.conf); [ "$t1" = "$t2" ] && echo "stable=yes" || echo "stable=NO"
+echo "hex=$(printf '%s' "$t1" | grep -cE '^[0-9a-f]{64}$')"
+rm -f /tmp/tok2.conf; CONF=/tmp/tok2.conf; head() { return 1; }; ensure_conf; echo "rc_noentropy=$?"; grep -c '^TOKEN=.' /tmp/tok2.conf || true
+EOT
+RS 'sh /tmp/token.sh' > "$OUT/token.txt" 2>&1
+ok "token generated on first start: 64 hex chars (256 bit)" sh -c "grep -q '^len=64' '$OUT/token.txt' && grep -q '^hex=1' '$OUT/token.txt'"
+ok "config file is root-only (0600)" grep -q '^mode=-rw-------' "$OUT/token.txt"
+ok "an existing token is never rotated" grep -q '^stable=yes' "$OUT/token.txt"
+ok "no entropy -> refuses to start, no weak token written" sh -c "grep -q '^rc_noentropy=1' '$OUT/token.txt' && ! grep -q '^TOKEN=.' '$T/tmp/tok2.conf'"
+
 echo; echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

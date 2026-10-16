@@ -114,6 +114,13 @@ class OpenWrtAdapter @Inject constructor(
 
     override suspend fun connect(config: RouterConnectionConfig): RouterConnectionResult = withContext(Dispatchers.IO) {
         this@OpenWrtAdapter.config = config
+        // The weshah-agent is plain HTTP, and so is ubus when useHttps is off: local addresses only.
+        if (!NetworkGuard.isPrivateLiteral(config.ipAddress)) {
+            return@withContext RouterConnectionResult.Failure(
+                "Refusing to send credentials in cleartext to a non-local address (${config.ipAddress})",
+                RouterErrorCode.VALIDATION_ERROR
+            )
+        }
         val scheme = if (config.useHttps) "https" else "http"
         baseUrl = "$scheme://${config.ipAddress}:${config.port}/"
 

@@ -29,7 +29,7 @@ mountpoint -q "$T/proc" || mount -t proc proc "$T/proc"
 for a in reboot poweroff halt; do rm -f "$T/sbin/$a" "$T/bin/$a"; done
 
 # 4. install the agent exactly as the package lays it out
-cp -a "$AGENT/files/." "$T/"
+cp -a "${WESHAH_STAGE:-$AGENT/files}/." "$T/"
 
 # 5. shims for netlink tools + service reload recorders
 [ -e "$T/bin/ubus.real" ] || mv "$T/bin/ubus" "$T/bin/ubus.real"
