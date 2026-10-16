@@ -39,15 +39,18 @@ Requirements: Android Studio Iguana+, JDK 17, Android SDK 35.
 
 ## weshah-agent Setup
 
-Install on your OpenWrt router to enable full bandwidth control:
+Install the package on your OpenWrt router (check compatibility first, nothing is written by the check):
 
 ```sh
-scp weshah-agent/src/weshah-agent root@192.168.1.1:/usr/sbin/
-scp weshah-agent/etc/init.d/weshah-agent root@192.168.1.1:/etc/init.d/
-ssh root@192.168.1.1 "chmod +x /usr/sbin/weshah-agent /etc/init.d/weshah-agent && /etc/init.d/weshah-agent enable && /etc/init.d/weshah-agent start"
+scp weshah-agent/preflight/weshah-preflight.sh root@192.168.1.1:/tmp/ && ssh root@192.168.1.1 sh /tmp/weshah-preflight.sh
+scp weshah-agent_2.1.0-1_all.ipk root@192.168.1.1:/tmp/ && ssh root@192.168.1.1 'opkg install /tmp/weshah-agent_2.1.0-1_all.ipk'
 ```
 
-The app auto-detects weshah-agent at `http://<router-ip>:8765/weshah/`. Without the agent, device listing still works via ubus but bandwidth control is unavailable.
+The app logs in with the router's own username/password at `http://<router-ip>:8765/api/v1/auth/login` and receives the agent token (the token itself is in `/etc/weshah-agent.conf`, root only). Details and API:
+[docs/OPENWRT_INTEGRATION.md](docs/OPENWRT_INTEGRATION.md), procedure and rollback:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Builds and tests: the `Weshah CI` workflow
+(`.github/workflows/weshah-ci.yml`) builds the debug APK and runs the agent against the real
+OpenWrt 18.06.9 userland.
 
 ## Security
 

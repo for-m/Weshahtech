@@ -1,0 +1,46 @@
+== header
+PASS  size equals the flash partition image size
+PASS  header version / vendor / fw_version unchanged
+PASS  hardware id and model id unchanged (what sysupgrade compares)
+PASS  hardware id is TL-WR841 v11 (0x08410011)
+PASS  load address / entry point unchanged
+PASS  kernel offset and length unchanged
+PASS  rootfs offset unchanged
+PASS  rootfs length matches the squashfs
+PASS  no bootloader in the image (sysupgrade requirement)
+PASS  md5sum1 zeroed, not stale (cannot be regenerated)
+PASS  all remaining header bytes unchanged
+== kernel
+PASS  kernel region is byte-identical to the original
+PASS  kernel gap between header and kernel is unchanged
+== rootfs
+PASS  squashfs magic
+PASS  squashfs 4.0, xz, 256 KiB blocks
+PASS  squashfs version 4.0
+PASS  compression is xz (the kernel option the original uses)
+PASS  block size 256 KiB
+PASS  superblock bytes_used equals the file length
+PASS  image embeds exactly this squashfs
+PASS  squashfs unpacks without errors
+PASS  nothing was removed from the original system
+PASS  only banner and opkg status were modified
+PASS  exactly the Weshah files were added
+PASS  agent config is mode 0600
+PASS  agent entry points are executable
+PASS  service is enabled at boot (S99 symlink)
+PASS  stock services keep their rc.d entries
+PASS  OpenWrt identity untouched (opkg feeds / sysupgrade rely on it)
+PASS  board identification scripts untouched
+PASS  opkg knows the package (single stanza, installed)
+== layout
+PASS  padding after squashfs is 0xFF up to the 4 KiB boundary
+PASS  jffs2 end marker deadc0de at the boundary
+PASS  everything after the marker is erased flash (0xFF)
+PASS  rootfs_data (overlay) keeps >= 128 KiB: 192 KiB
+== the firmware's own sysupgrade image check (lib/upgrade/platform.sh), run on this image
+PASS  platform_check_image ACCEPTS the Weshah image
+PASS  ...and REJECTS a wrong hardware id (negative control)
+PASS  ...and REJECTS an image containing a bootloader (negative control)
+PASS  the original image is accepted by the same code (baseline)
+
+RESULT: 39 passed, 0 failed

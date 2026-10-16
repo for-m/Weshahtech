@@ -25,6 +25,7 @@ def main():
         ap.add_argument("--" + k, required=True)
     ap.add_argument("--chroot")
     a = ap.parse_args()
+    os.makedirs(a.work, exist_ok=True)
     orig = open(a.factory, "rb").read(); img = open(a.image, "rb").read(); rfs = open(a.rootfs, "rb").read()
     h0, h1 = orig[:512], img[:512]
     f = lambda h: struct.unpack(">IIIIIII", h[124:152])

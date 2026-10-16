@@ -1,111 +1,56 @@
-# OpenWrt Integration Guide
+# OpenWrt integration — weshah-agent 2.1
 
-## Connection Methods
+The agent is a set of POSIX shell modules served by the router's stock `uhttpd` as a CGI
+(`/api`, port 8765, LAN + loopback only). No `nc`, no extra daemon besides a 30-second
+reconcile ticker. Tested on OpenWrt 18.06.9 ar71xx/tiny (BusyBox 1.28.4, fw3/iptables); the code
+also has nft and DSA paths that are exercised in the kernel test suite and in CI but **not**
+on real hardware.
 
-### Method 1: weshah-agent (Recommended)
+## Install
 
-Install the WESHAH agent on your OpenWrt router for full feature support including bandwidth control.
-
-**Requirements:**
-- OpenWrt 21.02+ with nftables OR iptables
-- `tc` (traffic control) — included in OpenWrt base
-- `hostapd-utils` for Wi-Fi deauth
-- `nc` (netcat) for the HTTP server
-
-**Installation:**
-```sh
-# From your computer
-scp weshah-agent/src/weshah-agent root@192.168.1.1:/usr/sbin/
-scp weshah-agent/etc/init.d/weshah-agent root@192.168.1.1:/etc/init.d/
-ssh root@192.168.1.1 << 'EOF'
-chmod +x /usr/sbin/weshah-agent /etc/init.d/weshah-agent
-/etc/init.d/weshah-agent enable
-/etc/init.d/weshah-agent start
-EOF
-```
-
-**Verify:**
-```sh
-curl http://192.168.1.1:8765/api/status -H "Authorization: Bearer $(cat /etc/weshah-agent.conf | grep TOKEN | cut -d= -f2)"
-```
-
-**API Endpoints:**
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/auth/login` | Exchange credentials for token |
-| GET | `/api/status` | Router info, WAN status, CPU/RAM |
-| GET | `/api/devices` | All known devices |
-| POST | `/api/devices/{mac}/speed` | Set speed limit |
-| DELETE | `/api/devices/{mac}/speed` | Remove speed limit |
-| POST | `/api/devices/{mac}/block` | Block internet access (WAN only) |
-| DELETE | `/api/devices/{mac}/block` | Unblock internet access |
-| POST | `/api/devices/{mac}/disconnect` | Deauth from Wi-Fi |
-
-**Speed limit request body:**
-```json
-{"downloadKbps": 5120, "uploadKbps": 1024}
-```
-
-**Block request body:**
-```json
-{"expiresAt": null}
-```
-
-### Method 2: Raw ubus (Fallback)
-
-The app connects via ubus JSON-RPC at `http(s)://<ip>/ubus`.
-
-**Supported operations via raw ubus:**
-- ✅ Router info (system.board, system.info)
-- ✅ DHCP leases (luci-rpc or uci show dhcp)
-- ✅ Connected clients (iwinfo, hostapd)
-- ✅ Internet blocking (UCI firewall rules)
-- ❌ Bandwidth control — requires weshah-agent
-- ❌ Per-device traffic stats — requires nlbw (not standard)
-
-**Required OpenWrt packages:**
-```
-opkg install rpcd rpcd-mod-rpcsys uhttpd luci-mod-rpc
-```
-
-## Speed Limit Implementation
-
-Speed limits use Linux Traffic Control (tc) with HTB (Hierarchical Token Bucket):
-
-```
-# Packet marking (nftables)
-nft add rule bridge filter FORWARD ether saddr {mac} meta mark set {mark}
-
-# Download rate limit (on WAN egress)
-tc qdisc add dev eth1 root handle 1: htb default 999
-tc class add dev eth1 parent 1: classid 1:{mark} htb rate {down}kbit ceil {down}kbit
-tc filter add dev eth1 parent 1: handle {mark} fw classid 1:{mark}
-
-# Upload rate limit (on LAN bridge)
-tc qdisc add dev br-lan root handle 1: htb default 999
-tc class add dev br-lan parent 1: classid 1:{mark} htb rate {up}kbit ceil {up}kbit
-tc filter add dev br-lan parent 1: handle {mark} fw classid 1:{mark}
-```
-
-Rules persist across:
-- App close: ✅ (rules live in kernel)
-- App uninstall: ✅ (rules live in kernel)
-- Router reboot: ✅ (UCI firewall rules + weshah-agent restores on startup via rc.local)
-- Phone reboot: ✅ (rules are on the router, not the phone)
-
-## Firewall Block Implementation
-
-Blocks use UCI firewall rules for persistence:
+Prerequisite check (read-only, run on the router): `weshah-agent/preflight/weshah-preflight.sh`.
 
 ```sh
-uci set firewall.weshah_block_{mac_underscore}=rule
-uci set firewall.weshah_block_{mac_underscore}.src=lan
-uci set firewall.weshah_block_{mac_underscore}.dest=wan
-uci set firewall.weshah_block_{mac_underscore}.src_mac={mac}
-uci set firewall.weshah_block_{mac_underscore}.target=REJECT
-uci commit firewall
-/etc/init.d/firewall reload
+scp weshah-agent_2.1.0-1_all.ipk root@192.168.1.1:/tmp/
+ssh root@192.168.1.1 'opkg install /tmp/weshah-agent_2.1.0-1_all.ipk'
 ```
 
-**LAN access is preserved** — only WAN (internet) is blocked. The device can still reach the router admin panel and other local devices.
+`opkg` resolves `uhttpd jsonfilter jshn uci ubus rpcd iw` from the feed if one of them is missing.
+The app does not need the token pasted: it logs in with the router's own credentials (`/auth/login`) and receives it. First start generates a 256-bit token from `/dev/urandom`; if that fails the agent refuses to
+start instead of using a weak token. The token and `/etc/weshah-agent/` survive `sysupgrade`
+(`/lib/upgrade/keep.d/weshah-agent`). See `docs/DEPLOYMENT.md` for the full procedure.
+
+## API (all under `/api/v1`, header `Authorization: Bearer <token>`)
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/auth/login` | only unauthenticated route; ubus session login, 401 + 1 s delay on failure |
+| GET | `/status` `/capabilities` `/interfaces` `/multi-wan` `/health` | `capabilities` carries `reasons` for every unsupported feature |
+| GET | `/devices`, `/devices/{mac}/traffic` | leases + ARP + Wi-Fi + firewall counters (64-bit safe) |
+| GET/POST/DELETE | `/devices/{mac}/speed` | tc htb; `501`-style "unsupported" with a reason when `tc`/kernel modules are missing |
+| GET/POST | `/devices/{mac}/block`, POST `/devices/{mac}/unblock` | UCI rules `weshah_block_<mac>`, optional `expiresAt` (s or ms) |
+| GET/POST/DELETE | `/devices/{mac}/schedule` | allowed windows, ISO weekdays (1=Mon), end exclusive, overnight wraps, never acts on an unsynced clock |
+| POST | `/devices/{mac}/disconnect` | hostapd `del_client` → `hostapd_cli` → `iw station del` |
+| GET/POST/DELETE | `/dhcp/static[/{mac}]` | UCI host sections, IP must be inside the LAN |
+| GET | `/ports`, `/ports/{n}/diagnostics`, `/wifi`, `/wifi/clients` | read-only |
+| GET/POST/PUT/DELETE, POST `/vlans/confirm` | `/vlans[/{id}]` | swconfig and DSA; id 2–4094; **commit-confirm**: reverts by itself unless confirmed |
+| POST | `/backup` | `sysupgrade -b` + manifest (board, release) |
+| POST | `/restore/validate`, `/restore/apply`, `/restore/confirm` | validate (size, gzip, tar safety, board) → apply by sha256 → auto-rollback if not confirmed after the reboot |
+| GET | `/lldp` | `501` — not implemented |
+
+Error mapping: 400 bad input, 401 auth, 404 unknown, 409 conflict, 413 body too large, 501
+unsupported, 503 agent not configured. Every unsupported feature returns a reason; nothing is faked.
+
+## What it changes on the router
+
+UCI only (`firewall`, `dhcp`, `network`, section names prefixed `weshah_`), runtime `tc`/firewall
+counters, `/etc/weshah-agent/`, `/tmp/weshah-agent/`. It never writes firmware or MTD partitions.
+Only `weshah_*` sections are ever modified or deleted; foreign `tc` qdiscs are left alone.
+
+## Known limits
+
+- Speed limits need `tc` + `kmod-sched-core`/`kmod-sched` (htb, u32, mirred) + a mark match. The stock
+  18.06.9 ar71xx/tiny image has **none** of them and the 4 MB flash cannot take them, so the
+  capability reports unsupported with the reason (verified on the real image userland).
+- Wi-Fi SSID/password management, hotspot cards and LLDP are not implemented in the agent.
+- VLAN `ssid` and `clientIsolation` fields are rejected with `unsupported_field:*`.

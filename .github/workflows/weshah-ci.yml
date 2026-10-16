@@ -23,7 +23,7 @@ jobs:
           cd weshah-agent/files
           shellcheck -s dash -S warning -e SC3043,SC1090,SC1091,SC2086,SC2155,SC2034,SC2154,SC2046 -x \
             usr/lib/weshah-agent/*.sh usr/lib/weshah-agent/www/api usr/libexec/weshah-agent/tick \
-            usr/sbin/weshah-agent-ticker etc/init.d/weshah-agent
+            usr/sbin/weshah-agent-ticker etc/init.d/weshah-agent ../preflight/weshah-preflight.sh
 
   agent-kernel:
     runs-on: ubuntu-24.04
