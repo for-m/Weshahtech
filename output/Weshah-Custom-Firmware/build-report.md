@@ -82,5 +82,15 @@ remaining flash after `sysupgrade`; recovery from a failed flash; the identity o
 
 ## 7. Android app build status
 
-See the `Weshah CI` workflow (`android` job: `./gradlew testDebugUnitTest`, `:app:assembleDebug`, artifact `weshah-debug-apk`).
-Status at the time of writing is stated in the final hand-off message; no APK is claimed here unless CI produced it.
+GitHub Actions run `38973350914` (`Weshah CI`, commit 16eb920), all four jobs green: `agent-lint`, `agent-kernel`,
+`agent-firmware-userland`, `android`.
+
+- `android` job: `./gradlew testDebugUnitTest` passed (TimeRange 7, adapter protocol 15, NetworkGuard 3; the 10 live
+  contract tests are skipped there because they need a running agent and are executed in `agent-firmware-userland`),
+  then `:app:assembleDebug` produced the debug APK.
+- APK: artifact **`Weshah-NetworkManager-debug-apk`** of that run (20,833,626 B zip; sha256 of the artifact zip
+  `b4920eec025c85ad82228ade920be8aaddc1707974c84232155b63c224cd7797`), URL
+  `https://github.com/for-m/Weshahtech/actions/runs/38973350914` → Artifacts. It was **not** installed or run on any device or
+  emulator: install/launch, Compose navigation at runtime, Hilt graph at runtime and Android-version behaviour are untested.
+- The Android project had never been built before this work (no Gradle wrapper, missing module dependencies, ~120 compile
+  errors in `ui`); these were fixed iteratively against the CI compiler (commits 2c3985c … 16eb920).
