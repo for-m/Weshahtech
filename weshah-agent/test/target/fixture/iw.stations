@@ -1,0 +1,12 @@
+Station aa:bb:cc:00:00:01 (on wlan0)
+	inactive time:	1200 ms
+	rx bytes:	123456
+	signal:  	-52 [-55, -54] dBm
+	signal avg:	-53 [-56, -55] dBm
+	tx bitrate:	72.2 MBit/s MCS 7 short GI
+	rx bitrate:	65.0 MBit/s MCS 7
+Station aa:bb:cc:00:00:02 (on wlan0)
+	inactive time:	300 ms
+	signal:  	-71 [-72, -73] dBm
+	tx bitrate:	24.0 MBit/s
+	rx bitrate:	6.0 MBit/s

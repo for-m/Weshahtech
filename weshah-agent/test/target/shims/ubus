@@ -1,0 +1,12 @@
+#!/bin/sh
+# Test shim: netifd is not running in the test root; its objects are answered from fixtures.
+# Everything else (session login via the real rpcd, etc.) goes to the firmware's real ubus.
+F=/tmp/fixture
+LOG=/tmp/shim.log
+case "$1 $2 $3" in
+    "call network.interface.wan status") cat "$F/wan.status"; exit 0 ;;
+    "call network.interface.lan status") cat "$F/lan.status"; exit 0 ;;
+    "call hostapd.wlan0 del_client") echo "hostapd del_client $4" >> "$LOG"; echo '{}'; exit 0 ;;
+    "call network.interface."*) echo "Command failed: Not found" >&2; exit 4 ;;
+esac
+exec /bin/ubus.real "$@"

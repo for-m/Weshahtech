@@ -1,0 +1,10 @@
+#!/bin/sh
+# iptables 1.6.2 (MIPS) cannot talk to the sandbox kernel. Calls are recorded; listings come from fixtures.
+echo "$(basename "$0") $*" >> /tmp/iptables.log
+case "$*" in
+    *" -nvxL "*) cat "/tmp/fixture/$(basename "$0").acct" 2>/dev/null; exit 0 ;;
+    *" -nL "*) [ -e /tmp/fixture/iptables.chain ] && exit 0; exit 1 ;;
+    *" -C "*) exit 1 ;;
+esac
+[ -t 0 ] || cat >> /tmp/iptables.log 2>/dev/null
+exit 0

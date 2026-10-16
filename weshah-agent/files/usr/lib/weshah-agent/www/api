@@ -1,0 +1,148 @@
+#!/bin/sh
+# shellcheck shell=dash disable=SC3043,SC1091
+# WESHAH agent REST API — CGI entry point served by uhttpd (see init.d/weshah-agent).
+# URL: /api/v1/<resource>...   (uhttpd passes the part after /api in PATH_INFO)
+
+LIB="${WESHAH_LIB:-/usr/lib/weshah-agent}"
+. "$LIB/lib.sh"
+for m in enforce acct qos system devices vlan backup; do . "$LIB/$m.sh"; done
+
+BODY_FILE=""
+cleanup() { [ -n "$BODY_FILE" ] && rm -f "$BODY_FILE"; }
+trap cleanup EXIT
+
+http_reason() {
+    case "$1" in
+        200) echo OK ;; 400) echo "Bad Request" ;; 401) echo Unauthorized ;; 404) echo "Not Found" ;;
+        405) echo "Method Not Allowed" ;; 409) echo Conflict ;; 413) echo "Payload Too Large" ;;
+        500) echo "Internal Server Error" ;; 501) echo "Not Implemented" ;; 503) echo "Service Unavailable" ;;
+        *) echo Error ;;
+    esac
+}
+
+respond() { # <code> <json body>
+    printf 'Status: %s %s\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n%s' "$1" "$(http_reason "$1")" "$2"
+}
+
+rc_to_http() {
+    case "$1" in
+        0) echo 200 ;; 2) echo 400 ;; 3) echo 404 ;; 4) echo 409 ;; 5) echo 501 ;; 6) echo 500 ;; 7) echo 503 ;; 8) echo 401 ;;
+        *) echo 500 ;;
+    esac
+}
+
+# run <command...>: executes, maps the exit code to an HTTP status
+run() {
+    local out rc
+    out=$("$@"); rc=$?
+    respond "$(rc_to_http "$rc")" "$out"
+}
+
+run_locked() { run with_lock "$@"; }
+
+err() { respond "$1" "{\"success\":false,\"error\":$(jstr "$2")}"; }
+
+METHOD="${REQUEST_METHOD:-GET}"
+case "${PATH_INFO:-}" in
+    ''|*[!A-Za-z0-9/_.:-]*) err 400 invalid_path; exit 0 ;;
+esac
+[ "${#PATH_INFO}" -le 200 ] || { err 400 invalid_path; exit 0; }
+
+p=${PATH_INFO#/}
+IFS=/
+# shellcheck disable=SC2086
+set -- $p
+unset IFS
+[ "$1" = v1 ] || { err 404 not_found; exit 0; }
+shift
+R="$1"; ID="$2"; SUB="$3"
+
+# ── authentication ────────────────────────────────────────────────────────────
+if ! { [ "$METHOD" = POST ] && [ "$R" = auth ] && [ "$ID" = login ]; }; then
+    [ "${#TOKEN}" -ge 32 ] || { err 503 agent_not_configured; exit 0; }
+    [ "$HTTP_AUTHORIZATION" = "Bearer $TOKEN" ] || { err 401 unauthorized; exit 0; }
+fi
+
+# ── request body ──────────────────────────────────────────────────────────────
+BODY=""
+LEN="${CONTENT_LENGTH:-0}"
+case "$LEN" in ''|*[!0-9]*) err 400 invalid_content_length; exit 0 ;; esac
+MAXLEN=65536
+[ "$R" = restore ] && [ "$ID" = validate ] && MAXLEN=5242880
+if [ "$LEN" -gt "$MAXLEN" ]; then err 413 body_too_large; exit 0; fi
+if [ "$LEN" -gt 0 ]; then
+    BODY_FILE="$RUN_DIR/body.$$"
+    head -c "$LEN" > "$BODY_FILE"
+    if [ "$R" = restore ] && [ "$ID" = validate ]; then :; else BODY=$(cat "$BODY_FILE"); fi
+fi
+
+mac="$ID"
+
+# ── routing ───────────────────────────────────────────────────────────────────
+case "$METHOD /$R${ID:+/:}${SUB:+/$SUB}" in
+
+    "POST /auth/:")      [ "$ID" = login ] && run do_login "$BODY" || err 404 not_found ;;
+
+    "GET /status")       run get_status ;;
+    "GET /capabilities") run get_capabilities ;;
+    "GET /interfaces")   run get_interfaces ;;
+    "GET /multi-wan")    run get_multi_wan ;;
+    "GET /health")       run get_health ;;
+
+    "GET /devices")                 run get_devices ;;
+    "GET /devices/:/traffic")       run get_device_traffic "$mac" ;;
+    "GET /devices/:/speed")         run_locked speed_status "$mac" ;;
+    "POST /devices/:/speed")
+        run_locked set_speed "$mac" "$(json_get "$BODY" '@.downloadKbps' | sed 's/^$/0/')" "$(json_get "$BODY" '@.uploadKbps' | sed 's/^$/0/')" ;;
+    "DELETE /devices/:/speed")      run_locked remove_speed "$mac" ;;
+    "GET /devices/:/block")         run block_status "$mac" ;;
+    "POST /devices/:/block")        run_locked block_device "$mac" "$(json_get "$BODY" '@.expiresAt')" ;;
+    "POST /devices/:/unblock")      run_locked unblock_device "$mac" ;;
+    "POST /devices/:/disconnect")   run disconnect_device "$mac" ;;
+    "GET /devices/:/schedule")      run schedule_status "$mac" ;;
+    "POST /devices/:/schedule")     run_locked set_schedule "$mac" "$BODY" ;;
+    "DELETE /devices/:/schedule")   run_locked remove_schedule "$mac" ;;
+
+    "GET /dhcp/:")
+        [ "$ID" = static ] && run get_static_leases || err 404 not_found ;;
+    "POST /dhcp/:")
+        [ "$ID" = static ] && run_locked add_static_lease "$(json_get "$BODY" '@.mac')" "$(json_get "$BODY" '@.ip')" "$(json_get "$BODY" '@.hostname')" || err 404 not_found ;;
+    "DELETE /dhcp/:/"*)
+        [ "$ID" = static ] && run_locked remove_static_lease "$SUB" || err 404 not_found ;;
+
+    "GET /ports")                   run get_ports ;;
+    "GET /ports/:/diagnostics")     run get_cable_diagnostics "$ID" ;;
+
+    "GET /wifi")                    run get_wifi ;;
+    "GET /wifi/:")
+        [ "$ID" = clients ] && run get_wifi_clients || err 404 not_found ;;
+
+    "GET /lldp")                    err 501 lldp_not_implemented ;;
+
+    "GET /vlans")                   run get_vlans ;;
+    "POST /vlans")                  run_locked create_vlan "$BODY" ;;
+    "PUT /vlans/:")                 run_locked update_vlan "$ID" "$BODY" ;;
+    "DELETE /vlans/:")              run_locked delete_vlan "$ID" ;;
+    "POST /vlans/:")
+        [ "$ID" = confirm ] && run_locked confirm_changes || err 404 not_found ;;
+
+    "POST /backup")
+        f=$(create_backup_file) || { err 501 backup_unavailable; exit 0; }
+        printf 'Status: 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename="weshah-backup.tar.gz"\r\nContent-Length: %s\r\nCache-Control: no-store\r\n\r\n' "$(wc -c < "$f")"
+        cat "$f"; rm -f "$f" ;;
+
+    "POST /restore/:")
+        case "$ID" in
+            validate)
+                [ -n "$BODY_FILE" ] || { err 400 empty_body; exit 0; }
+                out=$(with_lock stage_restore "$BODY_FILE"); rc=$?
+                BODY_FILE=""
+                respond "$(rc_to_http "$rc")" "$out" ;;
+            apply)   run_locked apply_restore "$BODY" ;;
+            confirm) run_locked confirm_restore ;;
+            *) err 404 not_found ;;
+        esac ;;
+
+    *) err 404 not_found ;;
+esac
+exit 0

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Records service reloads instead of running fw3/netifd/dnsmasq in the test root.
+echo "$(basename "$0") $*" >> /tmp/reload.log

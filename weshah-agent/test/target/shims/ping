@@ -1,0 +1,24 @@
+#!/bin/sh
+# Test shim: no ICMP to the outside from the sandbox. Output follows BusyBox ping.
+host=""; for a in "$@"; do host="$a"; done
+if [ "$host" = "203.0.113.1" ] || [ "$host" = "1.1.1.1" ]; then
+cat <<EOT
+PING $host ($host): 56 data bytes
+64 bytes from $host: seq=0 ttl=57 time=10.500 ms
+64 bytes from $host: seq=1 ttl=57 time=12.250 ms
+64 bytes from $host: seq=2 ttl=57 time=11.000 ms
+64 bytes from $host: seq=3 ttl=57 time=14.100 ms
+
+--- $host ping statistics ---
+4 packets transmitted, 4 packets received, 0% packet loss
+round-trip min/avg/max = 10.500/11.962/14.100 ms
+EOT
+else
+cat <<EOT
+PING $host ($host): 56 data bytes
+
+--- $host ping statistics ---
+4 packets transmitted, 0 packets received, 100% packet loss
+EOT
+exit 1
+fi

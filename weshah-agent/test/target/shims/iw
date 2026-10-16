@@ -1,0 +1,12 @@
+#!/bin/sh
+# Test shim: nl80211 is unavailable under qemu-user. Serves captured iw 4.14 output formats.
+F=/tmp/fixture
+LOG=/tmp/shim.log
+case "$*" in
+    "dev") cat "$F/iw.dev" ;;
+    "dev wlan0 info") cat "$F/iw.info" ;;
+    "dev wlan0 station dump") cat "$F/iw.stations" ;;
+    "dev wlan0 station get "*) grep -qi "${5}" "$F/iw.stations" && echo "Station $5 (on wlan0)" || exit 1 ;;
+    "dev wlan0 station del "*) echo "iw station del $5" >> "$LOG" ;;
+    *) exit 1 ;;
+esac

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Test shim: BusyBox `tar c...z` re-executes /proc/self/exe to run gzip, which qemu-user cannot do
+# (it is the emulator binary there). On a router it works natively. Compress through a pipe instead.
+REAL=/opt/realbin/tar
+case "$1" in
+    c*z*)
+        opts=$(printf '%s' "$1" | tr -d z); shift
+        case "$opts" in *f) out="$1"; shift ;; *) echo "tar shim: unsupported options" >&2; exit 2 ;; esac
+        tmp="$out.tarshim.$$"
+        "$REAL" "${opts%f}f" "$tmp" "$@"; rc=$?
+        [ "$rc" = 0 ] && gzip -c < "$tmp" > "$out"; rc2=$?
+        rm -f "$tmp"
+        [ "$rc" = 0 ] && exit "$rc2"; exit "$rc" ;;
+esac
+exec "$REAL" "$@"

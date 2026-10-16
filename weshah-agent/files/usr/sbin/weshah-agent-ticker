@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs the reconcile tick forever (supervised by procd).
+INTERVAL="${WESHAH_TICK_INTERVAL:-30}"
+while :; do
+    /usr/libexec/weshah-agent/tick
+    sleep "$INTERVAL"
+done

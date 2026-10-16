@@ -1,0 +1,8 @@
+#!/bin/sh
+# Test shim: swconfig uses generic netlink. Returns link state per port from a fixture.
+F=/tmp/fixture
+case "$*" in
+    list) echo "Found: switch0 - ag71xx-mdio.1" ;;
+    "dev switch0 port "*" get link") grep "^port $4 " "$F/swconfig.links" | cut -d' ' -f3- ;;
+    *) : ;;
+esac

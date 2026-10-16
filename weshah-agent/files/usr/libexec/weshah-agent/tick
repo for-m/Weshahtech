@@ -1,0 +1,15 @@
+#!/bin/sh
+# shellcheck shell=dash disable=SC3043,SC1091
+# Periodic reconcile: schedules, block expiry, speed limits, counters, and the
+# automatic rollbacks for unconfirmed VLAN / restore changes. Safe to run often.
+LIB="${WESHAH_LIB:-/usr/lib/weshah-agent}"
+. "$LIB/lib.sh"
+for m in enforce acct qos system devices vlan backup; do . "$LIB/$m.sh"; done
+
+tick_main() {
+    rollback_check
+    restore_rollback_check
+    reconcile_all
+}
+
+with_lock tick_main >/dev/null

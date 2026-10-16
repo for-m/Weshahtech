@@ -1,0 +1,4 @@
+port 1 link: port:1 link:up speed:100baseT full-duplex txflow rxflow
+port 2 link: port:2 link:down
+port 3 link: port:3 link:up speed:1000baseT full-duplex
+port 4 link: port:4 link:down

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Test shim: sysupgrade refuses to save config "while running from ramdisk". On a real router the
+# root is an overlay; report that, as a router would.
+echo "overlayfs:/overlay on / type overlay (rw,noatime,lowerdir=/,upperdir=/overlay/upper,workdir=/overlay/work)"

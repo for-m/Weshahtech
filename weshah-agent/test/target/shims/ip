@@ -1,0 +1,11 @@
+#!/bin/sh
+# Test shim: BusyBox `ip` talks netlink, which hangs under qemu-user. Answers the few queries the agent makes.
+F=/tmp/fixture
+case "$*" in
+    "-4 addr show dev eth1")  echo "    inet 203.0.113.10/24 brd 203.0.113.255 scope global eth1" ;;
+    "-4 addr show dev br-lan") echo "    inet 192.168.1.1/24 brd 192.168.1.255 scope global br-lan" ;;
+    "route show default")     echo "default via 203.0.113.1 dev eth1" ;;
+    "-6 neigh show dev "*)    cat "$F/neigh6" 2>/dev/null ;;
+    *) : ;;
+esac
+exit 0

@@ -1,0 +1,2 @@
+#!/bin/sh
+echo "Server:    127.0.0.1"; echo "Name:      $2"; echo "Address 1: 198.51.100.7"
