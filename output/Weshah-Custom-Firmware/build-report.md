@@ -20,8 +20,8 @@ recommended way to deploy (no firmware change).
 
 | File | Size | Status |
 |---|---|---|
-| `weshah-agent_2.1.0-1_all.ipk` | 26,656 B | **Built and installed/removed with the firmware's own `opkg` in a chroot of the image's userland.** Arch-independent shell package. Deps: libc uhttpd jsonfilter jshn uci ubus rpcd iw |
-| `Weshah-rootfs.bin` | 2,319,204 B | squashfs 4.0 / xz / 256 KiB; validated (below) |
+| `weshah-agent_2.1.0-1_all.ipk` | 42683 B | **Built and installed/removed with the firmware's own `opkg` in a chroot of the image's userland.** Arch-independent shell package. Deps: libc uhttpd jsonfilter jshn uci ubus rpcd iw |
+| `Weshah-rootfs.bin` | 2333456 B | squashfs 4.0 / xz / 256 KiB; validated (below) |
 | `Weshah-firmware.bin` | 3,932,160 B | TP-Link v1 header + original kernel + Weshah rootfs, same total size as the original. **Structurally validated, never booted** |
 | `SHA256SUMS` | | checksums of the three files above |
 | `hardware-compatibility-report.md` | | identity + feature matrix |
@@ -40,8 +40,10 @@ image**, see §6), procd service enabled at boot (`S99weshah-agent`), `/etc/wesh
 opkg registration (`opkg list-installed` shows `weshah-agent`), sysupgrade keep-list (`/etc/weshah-agent.conf`,
 `/etc/weshah-agent/`).
 
+Weshah web dashboard (RTL, dark/light, ~46 KB, served by the agent's uhttpd on :8765; adds ~15 KB compressed to the rootfs, overlay stays 192 KiB).
+
 Not integrated because it does not exist in the project or cannot be installed: Wi-Fi SSID/password management API
-(stock LuCI in the image already does this), hotspot cards, a Weshah web UI/LuCI app, LLDP.
+(stock LuCI in the image already does this), hotspot cards, a LuCI application, LLDP.
 
 ## 4. Verification actually performed
 

@@ -84,7 +84,7 @@ def main():
                     "etc/weshah_release", "lib/upgrade/keep.d/weshah-agent", "usr/lib/opkg/info/weshah-agent.control",
                     "usr/lib/opkg/info/weshah-agent.list", "usr/lib/opkg/info/weshah-agent.conffiles",
                     "usr/libexec/weshah-agent/tick", "usr/sbin/weshah-agent-ticker"}
-    expect_added |= {"usr/lib/weshah-agent/" + n for n in ("lib.sh", "enforce.sh", "acct.sh", "qos.sh", "system.sh", "devices.sh", "vlan.sh", "backup.sh", "www/api")}
+    expect_added |= {"usr/lib/weshah-agent/" + n for n in ("lib.sh", "enforce.sh", "acct.sh", "qos.sh", "system.sh", "devices.sh", "vlan.sh", "backup.sh", "www/api", "www/index.html", "www/app.css", "www/app.js")}
     check("exactly the Weshah files were added", set(added) == expect_added, str(sorted(set(added) ^ expect_added)))
     st = os.stat(os.path.join(new_tree, "etc/weshah-agent.conf")).st_mode & 0o777
     check("agent config is mode 0600", st == 0o600, oct(st))

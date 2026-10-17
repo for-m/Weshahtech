@@ -46,7 +46,7 @@ scp weshah-agent/preflight/weshah-preflight.sh root@192.168.1.1:/tmp/ && ssh roo
 scp weshah-agent_2.1.0-1_all.ipk root@192.168.1.1:/tmp/ && ssh root@192.168.1.1 'opkg install /tmp/weshah-agent_2.1.0-1_all.ipk'
 ```
 
-The app logs in with the router's own username/password at `http://<router-ip>:8765/api/v1/auth/login` and receives the agent token (the token itself is in `/etc/weshah-agent.conf`, root only). Details and API:
+`http://<router-ip>:8765/` also opens the Weshah web dashboard (see [docs/OPENWRT_INTEGRATION.md](docs/OPENWRT_INTEGRATION.md)). The app logs in with the router's own username/password at `http://<router-ip>:8765/api/v1/auth/login` and receives the agent token (the token itself is in `/etc/weshah-agent.conf`, root only). Details and API:
 [docs/OPENWRT_INTEGRATION.md](docs/OPENWRT_INTEGRATION.md), procedure and rollback:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Builds and tests: the `Weshah CI` workflow
 (`.github/workflows/weshah-ci.yml`) builds the debug APK and runs the agent against the real

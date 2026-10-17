@@ -12,7 +12,7 @@ mkdir -p "$OUT"
 ( cd "$SRC" && find . -type d | sort ) | while read -r d; do mkdir -p "$OUT/$d"; done
 ( cd "$SRC" && find . -type f | sort ) | while read -r f; do
     case "$f" in
-        ./etc/weshah-agent.conf|./lib/upgrade/keep.d/*) cp "$SRC/$f" "$OUT/$f" ;;
+        ./etc/weshah-agent.conf|./lib/upgrade/keep.d/*|./usr/lib/weshah-agent/www/index.html|./usr/lib/weshah-agent/www/app.css|./usr/lib/weshah-agent/www/app.js) cp "$SRC/$f" "$OUT/$f" ;;
         *) awk 'NR == 1 && /^#!/ { print; next } /^[ \t]*#/ { next } /^[ \t]*$/ { next } { print }' "$SRC/$f" > "$OUT/$f" ;;
     esac
     if [ -x "$SRC/$f" ]; then chmod 755 "$OUT/$f"; else chmod 644 "$OUT/$f"; fi

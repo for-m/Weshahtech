@@ -20,6 +20,16 @@ The app does not need the token pasted: it logs in with the router's own credent
 start instead of using a weak token. The token and `/etc/weshah-agent/` survive `sysupgrade`
 (`/lib/upgrade/keep.d/weshah-agent`). See `docs/DEPLOYMENT.md` for the full procedure.
 
+## Web dashboard
+
+`http://<router-ip>:8765/` serves a modern Arabic (RTL) control panel from the same uhttpd, no extra packages and
+no internet needed (≈46 KB: `index.html`, `app.css`, `app.js`, no frameworks or CDN, strict CSP). Sign in with the router's
+own user/password. Pages: home (CPU/RAM, link quality, port panel), devices (block/unblock with duration, per-device
+schedule, disconnect), network (interfaces, ports, Wi-Fi, static DHCP), VLAN (create/edit/delete with automatic
+commit-confirm), system (capabilities with reasons, backup, verified restore with auto-wait/confirm). Dark and light
+themes, responsive down to phone width. Screenshots: `docs/screenshots/` (taken against the test fixtures, not a live router).
+It does not replace LuCI; the stock LuCI stays on port 80.
+
 ## API (all under `/api/v1`, header `Authorization: Bearer <token>`)
 
 | Method | Path | Notes |

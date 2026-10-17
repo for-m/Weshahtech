@@ -425,5 +425,17 @@ ok "config file is root-only (0600)" grep -q '^mode=-rw-------' "$OUT/token.txt"
 ok "an existing token is never rotated" grep -q '^stable=yes' "$OUT/token.txt"
 ok "no entropy -> refuses to start, no weak token written" sh -c "grep -q '^rc_noentropy=1' '$OUT/token.txt' && ! grep -q '^TOKEN=.' '$T/tmp/tok2.conf'"
 
+echo; echo "=== 14. web dashboard (static files served by the stock uhttpd)"
+ROOT=${BASE%/api/v1}
+ct() { curl -s -m 20 -o "$OUT/web.body" -w '%{http_code} %{content_type}' "$ROOT$1"; }
+ok "GET / serves the dashboard without credentials" sh -c "[ \"\$(curl -s -m 20 -o '$OUT/web.index' -w '%{http_code}' '$ROOT/')\" = 200 ] && grep -q 'app.js' '$OUT/web.index'"
+ok "app.js served as JavaScript" sh -c "ct() { curl -s -m 20 -o /dev/null -w '%{http_code} %{content_type}' '$ROOT/app.js'; }; ct | grep -qE '^200 (text|application)/(javascript|x-javascript)'"
+ok "app.css served as CSS" sh -c "curl -s -m 20 -o /dev/null -w '%{http_code} %{content_type}' '$ROOT/app.css' | grep -q '^200 text/css'"
+ok "the CGI script is executed, never served as source" sh -c "! curl -s -m 20 '$ROOT/api' | grep -q 'case \"\$METHOD'"
+ok "no directory listing for /api/" sh -c "[ \"\$(curl -s -m 20 -o /dev/null -w '%{http_code}' '$ROOT/api/')\" = 404 ]"
+ok "the API itself still requires the token" sh -c "[ \"\$(curl -s -m 20 -o /dev/null -w '%{http_code}' '$ROOT/api/v1/devices')\" = 401 ]"
+ok "index.html pins a Content-Security-Policy" grep -q 'Content-Security-Policy' "$OUT/web.index"
+ok "UI escapes router-supplied text (esc() used for hostnames)" sh -c "grep -q 'esc(dname(d))' '$T/usr/lib/weshah-agent/www/app.js'"
+
 echo; echo "RESULT: $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
