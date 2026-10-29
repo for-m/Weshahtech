@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>مدونة الحسابات</title>
+<style>
+:root {
+  --primary: #1a6b3a;
+  --primary-dark: #145530;
+  --primary-light: #e8f5ee;
+  --credit: #1a7a3a;
+  --debit: #c0392b;
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface2: #f0f2f4;
+  --border: #e0e0e0;
+  --text: #1a1a1a;
+  --text2: #666;
+  --shadow: 0 2px 8px rgba(0,0,0,.09);
+  --radius: 12px;
+  --nav-h: 64px;
+}
+[data-dark] {
+  --bg: #111418;
+  --surface: #1e2228;
+  --surface2: #252c34;
+  --border: #333a44;
+  --text: #eef0f2;
+  --text2: #8a929e;
+  --primary-light: #1a3028;
+  --shadow: 0 2px 8px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:'Segoe UI',Tahoma,Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding-bottom:var(--nav-h)}
+button{cursor:pointer;border:none;outline:none}
+input,textarea,select{font-family:inherit;outline:none}
+a{text-decoration:none;color:inherit}
+
+#app{max-width:640px;margin:0 auto;position:relative;min-height:100vh}
+
+.topbar{background:var(--primary);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:50}
+.topbar .back-btn{background:none;color:#fff;font-size:20px;padding:4px;border-radius:6px;line-height:1}
+.topbar h1{font-size:17px;font-weight:700;flex:1}
+.topbar .actions{display:flex;gap:4px}
+.topbar .icon-btn{background:none;color:#fff;padding:6px;border-radius:8px;font-size:18px;line-height:1}
+.topbar .icon-btn:hover{background:rgba(255,255,255,.15)}
+
+.bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:640px;height:var(--nav-h);background:var(--surface);border-top:1px solid var(--border);display:flex;z-index:100;box-shadow:0 -2px 10px rgba(0,0,0,.08)}
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--text2);font-size:11px;font-weight:500;transition:.15s}
+.nav-item.active{color:var(--primary)}
+.nav-icon{font-size:22px;line-height:1}
+
+.page{display:none;animation:fadeIn .18s ease}
+.page.active{display:block}
+@keyframes fadeIn{from{opacity:.5;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+.card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+
+.summary-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px 14px 0}
+.sum-card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px;display:flex;align-items:center;gap:10px}
+.sum-icon{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+.sum-label{font-size:11px;color:var(--text2)}
+.sum-val{font-size:15px;font-weight:700;margin-top:2px}
+.sum-full{grid-column:1/-1}
+
+.person-item{background:var(--surface);border-bottom:1px solid var(--border);padding:13px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:.12s}
+.person-item:hover{background:var(--surface2)}
+.person-item:last-child{border-bottom:none}
+.avatar{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;flex-shrink:0}
+.person-info{flex:1;min-width:0}
+.person-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.person-phone{font-size:12px;color:var(--text2);margin-top:2px}
+.person-balance{text-align:left;flex-shrink:0}
+.balance-amt{font-size:14px;font-weight:700}
+.balance-label{font-size:10px;margin-top:1px}
+.c-green{color:var(--credit)}
+.c-red{color:var(--debit)}
+.bg-green{background:#d4edda}
+.bg-red{background:#fde8e8}
+
+.tx-item{background:var(--surface);border-bottom:1px solid var(--border);padding:11px 14px;display:flex;align-items:center;gap:10px}
+.tx-item:last-child{border-bottom:none}
+.tx-icon{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.tx-info{flex:1;min-width:0}
+.tx-desc{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tx-date{font-size:11px;color:var(--text2);margin-top:2px}
+.tx-right{display:flex;align-items:center;gap:4px}
+.tx-amt{font-size:14px;font-weight:700}
+.del-btn{background:none;color:var(--text2);font-size:16px;padding:4px;border-radius:6px;opacity:.6}
+.del-btn:hover{opacity:1;color:var(--debit)}
+
+.section-head{padding:16px 16px 8px;font-size:13px;font-weight:700;color:var(--primary)}
+
+.bal-header{text-align:center;padding:22px 20px;border-bottom:1px solid var(--border)}
+.bal-amount{font-size:36px;font-weight:800;line-height:1.1}
+.bal-label{font-size:14px;margin-top:4px}
+.bal-phone{font-size:13px;color:var(--text2);margin-top:8px}
+
+.search-wrap{padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;gap:8px;align-items:center}
+.search-input{flex:1;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--surface2);color:var(--text);font-size:14px;direction:rtl}
+.sort-btn{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:7px 10px;color:var(--text2);font-size:12px}
+
+.fab{position:fixed;bottom:calc(var(--nav-h) + 16px);left:50%;transform:translateX(calc(-50% - 10px));background:var(--primary);color:#fff;border-radius:28px;padding:12px 20px;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;box-shadow:0 4px 16px rgba(26,107,58,.45);z-index:80}
+.fab:hover{background:var(--primary-dark)}
+.fab.fab-right{left:auto;right:16px;transform:none}
+
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;display:flex;align-items:flex-end;justify-content:center}
+.modal-overlay.hidden{display:none}
+.modal{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:640px;max-height:92vh;overflow-y:auto;padding:20px 16px 32px}
+.modal-title{font-size:17px;font-weight:700;margin-bottom:16px;text-align:center}
+.form-field{margin-bottom:14px}
+.form-field label{display:block;font-size:12px;font-weight:600;color:var(--text2);margin-bottom:5px}
+.form-field input,.form-field textarea,.form-field select{width:100%;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--surface2);color:var(--text);font-size:15px;direction:rtl}
+.form-field textarea{resize:vertical;min-height:72px}
+.type-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.type-btn{padding:14px 8px;border-radius:10px;border:2px solid var(--border);background:var(--surface2);color:var(--text2);font-size:13px;font-weight:600;text-align:center;transition:.15s}
+.type-btn.sel-credit{border-color:var(--credit);background:#e8f5ee;color:var(--credit)}
+.type-btn.sel-debit{border-color:var(--debit);background:#fef5f5;color:var(--debit)}
+[data-dark] .type-btn.sel-credit{background:#1a3028}
+[data-dark] .type-btn.sel-debit{background:#2e1818}
+.btn-primary{width:100%;padding:13px;background:var(--primary);color:#fff;border-radius:10px;font-size:15px;font-weight:700;margin-top:6px}
+.btn-primary:hover{background:var(--primary-dark)}
+.btn-row{display:flex;gap:8px;margin-top:6px}
+.btn-secondary{flex:1;padding:12px;background:var(--surface2);border:1px solid var(--border);color:var(--text2);border-radius:10px;font-size:14px;font-weight:600}
+.tx-preview{border-radius:8px;padding:10px 14px;margin:10px 0;font-size:13px;text-align:center;font-weight:500}
+
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px}
+.stat-card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px}
+.stat-label{font-size:11px;color:var(--text2);margin-bottom:4px}
+.stat-val{font-size:16px;font-weight:700}
+.stat-card.full{grid-column:1/-1}
+
+.settings-section{padding:14px 16px 4px;font-size:12px;font-weight:700;color:var(--primary)}
+.settings-item{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;gap:12px}
+.settings-item:first-of-type{border-top:1px solid var(--border)}
+.settings-icon{font-size:20px;width:28px;text-align:center}
+.settings-text{flex:1}
+.settings-title{font-size:14px;font-weight:600}
+.settings-sub{font-size:12px;color:var(--text2);margin-top:2px}
+.toggle{position:relative;width:44px;height:24px;flex-shrink:0}
+.toggle input{display:none}
+.toggle-track{position:absolute;inset:0;background:var(--border);border-radius:12px;transition:.2s}
+.toggle input:checked + .toggle-track{background:var(--primary)}
+.toggle-thumb{position:absolute;top:3px;right:3px;width:18px;height:18px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 4px rgba(0,0,0,.2)}
+.toggle input:checked ~ .toggle-thumb{right:auto;left:3px}
+.settings-chevron{color:var(--text2);font-size:14px}
+
+.empty{text-align:center;padding:48px 24px;color:var(--text2)}
+.empty-icon{font-size:64px;margin-bottom:12px;opacity:.4}
+.empty-text{font-size:14px}
+
+.snack{position:fixed;bottom:calc(var(--nav-h)+12px);left:50%;transform:translateX(-50%);background:#222;color:#fff;padding:10px 18px;border-radius:24px;font-size:13px;z-index:500;white-space:nowrap;transition:opacity .3s;pointer-events:none}
+.snack.hidden{opacity:0}
+
+.confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:300;display:flex;align-items:center;justify-content:center;padding:20px}
+.confirm-overlay.hidden{display:none}
+.confirm-box{background:var(--surface);border-radius:var(--radius);padding:24px 20px;width:100%;max-width:340px;box-shadow:0 8px 32px rgba(0,0,0,.2)}
+.confirm-title{font-size:16px;font-weight:700;margin-bottom:8px}
+.confirm-msg{font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.6}
+.confirm-btns{display:flex;gap:8px;justify-content:flex-end}
+.btn-cancel{padding:9px 16px;border-radius:8px;background:var(--surface2);color:var(--text2);font-size:13px;font-weight:600;border:1px solid var(--border)}
+.btn-danger{padding:9px 16px;border-radius:8px;background:var(--debit);color:#fff;font-size:13px;font-weight:600}
+
+.sheet-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:250;display:flex;align-items:flex-end;justify-content:center}
+.sheet-overlay.hidden{display:none}
+.sheet{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:640px;max-height:60vh;overflow-y:auto}
+.sheet-title{padding:16px;font-size:15px;font-weight:700;border-bottom:1px solid var(--border);text-align:center}
+.sheet-item{padding:14px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border);cursor:pointer}
+.sheet-item:hover{background:var(--surface2)}
+.sheet-sym{font-size:20px;font-weight:700;width:30px;text-align:center}
+.sheet-check{color:var(--primary);font-size:16px}
+
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+</style>
+</head>
+<body>
+<div id="app">
+
+<div id="page-dash" class="page active">
+  <div class="topbar">
+    <h1>مدونة الحسابات</h1>
+    <div class="actions"><button class="icon-btn" onclick="loadAll()" title="تحديث">↻</button></div>
+  </div>
+  <div class="summary-row">
+    <div class="sum-card">
+      <div class="sum-icon" style="background:#d4edda"><span style="color:var(--credit)">↓</span></div>
+      <div><div class="sum-label">إجمالي لي</div><div class="sum-val c-green" id="s-credit">0.00 ₪</div></div>
+    </div>
+    <div class="sum-card">
+      <div class="sum-icon" style="background:#fde8e8"><span style="color:var(--debit)">↑</span></div>
+      <div><div class="sum-label">إجمالي علي</div><div class="sum-val c-red" id="s-debit">0.00 ₪</div></div>
+    </div>
+    <div class="sum-card sum-full">
+      <div class="sum-icon" style="background:#e8eaf6"><span style="color:#5c6bc0">👥</span></div>
+      <div><div class="sum-label">إجمالي الأشخاص</div><div class="sum-val" id="s-persons" style="color:#5c6bc0">0</div></div>
+    </div>
+  </div>
+  <div class="section-head">آخر الحركات</div>
+  <div class="card" style="margin:0 14px 14px" id="recent-list">
+    <div class="empty"><div class="empty-icon">📋</div><div class="empty-text">لا توجد حركات بعد</div></div>
+  </div>
+</div>
+
+<div id="page-accounts" class="page">
+  <div class="topbar">
+    <h1>الحسابات</h1>
+    <div class="actions"><button class="icon-btn" id="sort-btn" onclick="toggleSort()" title="ترتيب">⇅</button></div>
+  </div>
+  <div class="search-wrap">
+    <input class="search-input" id="search-input" placeholder="بحث باسم أو هاتف..." oninput="filterPersons()">
+    <button class="sort-btn" onclick="showSortSheet()">ترتيب ▾</button>
+  </div>
+  <div id="persons-list"></div>
+  <button class="fab" onclick="openAddPerson()">＋ إضافة شخص</button>
+</div>
+
+<div id="page-detail" class="page">
+  <div class="topbar">
+    <button class="back-btn" onclick="goBack()">→</button>
+    <h1 id="detail-name">-</h1>
+    <div class="actions">
+      <button class="icon-btn" onclick="editCurrentPerson()" title="تعديل">✏️</button>
+      <button class="icon-btn" id="detail-menu-btn" onclick="toggleDetailMenu()" title="خيارات">⋮</button>
+    </div>
+  </div>
+  <div id="detail-menu" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:10px;position:absolute;top:60px;left:12px;z-index:60;min-width:160px;box-shadow:var(--shadow);overflow:hidden">
+    <div onclick="exportPersonCSV();toggleDetailMenu()" style="padding:12px 16px;cursor:pointer;font-size:14px;border-bottom:1px solid var(--border)">📥 تصدير CSV</div>
+    <div onclick="confirmDeletePerson();toggleDetailMenu()" style="padding:12px 16px;cursor:pointer;font-size:14px;color:var(--debit)">🗑 حذف الشخص</div>
+  </div>
+  <div id="detail-bal" class="bal-header bg-green">
+    <div class="bal-amount c-green" id="detail-bal-amt">0.00 ₪</div>
+    <div class="bal-label c-green" id="detail-bal-lbl">مسوّى</div>
+    <div class="bal-phone" id="detail-phone" style="display:none"></div>
+  </div>
+  <div id="tx-list"></div>
+  <button class="fab fab-right" onclick="openAddTx()">＋ إضافة حركة</button>
+</div>
+
+<div id="page-stats" class="page">
+  <div class="topbar"><h1>الإحصائيات</h1></div>
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-label">لي من الآخرين</div><div class="stat-val c-green" id="st-credit">-</div></div>
+    <div class="stat-card"><div class="stat-label">للآخرين مني</div><div class="stat-val c-red" id="st-debit">-</div></div>
+    <div class="stat-card"><div class="stat-label">إجمالي الأشخاص</div><div class="stat-val" id="st-persons">-</div></div>
+    <div class="stat-card"><div class="stat-label">إجمالي الحركات</div><div class="stat-val" id="st-tx">-</div></div>
+    <div class="stat-card full" style="background:var(--primary-light)">
+      <div class="stat-label">هذا الشهر</div>
+      <div style="display:flex;gap:16px;margin-top:6px;flex-wrap:wrap">
+        <div><div class="stat-label">إيداعات</div><div class="stat-val c-green" id="st-m-cr">-</div></div>
+        <div><div class="stat-label">سحوبات</div><div class="stat-val c-red" id="st-m-db">-</div></div>
+        <div><div class="stat-label">حركات</div><div class="stat-val" id="st-m-tx">-</div></div>
+      </div>
+    </div>
+  </div>
+  <div id="top-persons"></div>
+</div>
+
+<div id="page-settings" class="page">
+  <div class="topbar"><h1>الإعدادات</h1></div>
+  <div class="settings-section">العرض</div>
+  <div class="settings-item">
+    <div class="settings-icon">🌙</div>
+    <div class="settings-text"><div class="settings-title">الوضع الداكن</div><div class="settings-sub">تغيير مظهر التطبيق</div></div>
+    <label class="toggle"><input type="checkbox" id="dark-toggle" onchange="toggleDark(this.checked)"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+  </div>
+  <div class="settings-item" onclick="openCurrencySheet()">
+    <div class="settings-icon">💱</div>
+    <div class="settings-text"><div class="settings-title">العملة</div><div class="settings-sub" id="curr-name">شيكل إسرائيلي</div></div>
+    <div class="settings-chevron">‹</div>
+  </div>
+  <div class="settings-section">البيانات</div>
+  <div class="settings-item" onclick="exportAllCSV()">
+    <div class="settings-icon">📥</div>
+    <div class="settings-text"><div class="settings-title">تصدير كل البيانات (CSV)</div><div class="settings-sub">تصدير قائمة الأشخاص والأرصدة</div></div>
+    <div class="settings-chevron">‹</div>
+  </div>
+  <div class="settings-section">حول التطبيق</div>
+  <div class="settings-item">
+    <div class="settings-icon">ℹ️</div>
+    <div class="settings-text"><div class="settings-title">مدونة الحسابات</div><div class="settings-sub">الإصدار 1.0.0 — Weshah Tech</div></div>
+  </div>
+</div>
+
+<nav class="bottom-nav">
+  <div class="nav-item active" id="nav-dash" onclick="showPage('dash')"><div class="nav-icon">🏠</div><span>الرئيسية</span></div>
+  <div class="nav-item" id="nav-accounts" onclick="showPage('accounts')"><div class="nav-icon">👥</div><span>الحسابات</span></div>
+  <div class="nav-item" id="nav-stats" onclick="showPage('stats')"><div class="nav-icon">📊</div><span>الإحصائيات</span></div>
+  <div class="nav-item" id="nav-settings" onclick="showPage('settings')"><div class="nav-icon">⚙️</div><span>الإعدادات</span></div>
+</nav>
+
+<div class="modal-overlay hidden" id="modal-person">
+  <div class="modal">
+    <div class="modal-title" id="modal-person-title">إضافة شخص</div>
+    <div class="form-field"><label>الاسم *</label><input id="f-name" placeholder="اسم الشخص" type="text"></div>
+    <div class="form-field"><label>رقم الهاتف</label><input id="f-phone" placeholder="05xxxxxxxx" type="tel" dir="ltr"></div>
+    <div class="form-field"><label>ملاحظات</label><textarea id="f-notes" placeholder="ملاحظات اختيارية..."></textarea></div>
+    <div class="btn-row">
+      <button class="btn-secondary" onclick="closeModal('modal-person')">إلغاء</button>
+      <button class="btn-primary" style="flex:2" onclick="savePerson()">حفظ</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="modal-tx">
+  <div class="modal">
+    <div class="modal-title" id="modal-tx-title">إضافة حركة</div>
+    <div class="type-row">
+      <button class="type-btn sel-credit" id="type-credit" onclick="setTxType(0)">↓ له عليّ<br><small style="font-weight:400">(أعطيته)</small></button>
+      <button class="type-btn" id="type-debit" onclick="setTxType(1)">↑ عليه لي<br><small style="font-weight:400">(أخذت منه)</small></button>
+    </div>
+    <div class="form-field"><label>المبلغ *</label><input id="f-amount" placeholder="0.00" type="number" min="0.01" step="0.01" dir="ltr" style="font-size:20px;font-weight:700"></div>
+    <div class="form-field"><label>الوصف (اختياري)</label><input id="f-desc" placeholder="وصف الحركة..."></div>
+    <div class="tx-preview" id="tx-preview"></div>
+    <div class="btn-row">
+      <button class="btn-secondary" onclick="closeModal('modal-tx')">إلغاء</button>
+      <button class="btn-primary" style="flex:2" onclick="saveTransaction()">تسجيل</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-overlay hidden" id="sort-sheet">
+  <div class="sheet">
+    <div class="sheet-title">ترتيب القائمة</div>
+    <div class="sheet-item" onclick="setSortBy('name')"><span>🔤</span><span style="flex:1">الاسم</span><span class="sheet-check" id="sort-check-name">✓</span></div>
+    <div class="sheet-item" onclick="setSortBy('balance')"><span>💰</span><span style="flex:1">الرصيد</span><span class="sheet-check" id="sort-check-balance" style="display:none">✓</span></div>
+    <div class="sheet-item" onclick="setSortBy('date')"><span>📅</span><span style="flex:1">تاريخ الإضافة</span><span class="sheet-check" id="sort-check-date" style="display:none">✓</span></div>
+  </div>
+</div>
+
+<div class="sheet-overlay hidden" id="currency-sheet">
+  <div class="sheet">
+    <div class="sheet-title">اختر العملة</div>
+    <div id="currency-list"></div>
+  </div>
+</div>
+
+<div class="confirm-overlay hidden" id="confirm-overlay">
+  <div class="confirm-box">
+    <div class="confirm-title" id="confirm-title">تأكيد</div>
+    <div class="confirm-msg" id="confirm-msg"></div>
+    <div class="confirm-btns">
+      <button class="btn-cancel" onclick="closeConfirm()">إلغاء</button>
+      <button class="btn-danger" id="confirm-ok">حذف</button>
+    </div>
+  </div>
+</div>
+
+<div class="snack hidden" id="snack"></div>
+
+<script>
+const CURRENCIES=[
+  {name:'ILS - شيكل',sym:'₪'},{name:'USD - دولار',sym:'$'},{name:'JOD - دينار',sym:'JD'},
+  {name:'EGP - جنيه',sym:'ج.م'},{name:'SAR - ريال',sym:'ر.س'},{name:'AED - درهم',sym:'د.إ'},{name:'EUR - يورو',sym:'€'}
+];
+let allPersons=[],settings={currency_index:'0',dark_mode:'false'},currentPersonId=null,currentPersonName='',editPersonId=null,txType=0,sortBy='name',searchQ='',prevPage='dash';
+const api={
+  get:p=>fetch(p).then(r=>r.json()),
+  post:(p,d)=>fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)}).then(r=>r.json()),
+  put:(p,d)=>fetch(p,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)}).then(r=>r.json()),
+  del:p=>fetch(p,{method:'DELETE'}).then(r=>r.json()),
+};
+async function loadAll(){
+  settings=await api.get('/api/settings');
+  applySettings();
+  allPersons=await api.get(`/api/persons?sort=${sortBy}`);
+  renderPersons();
+  loadDashboard();
+}
+async function loadDashboard(){
+  const[stats,recent]=await Promise.all([api.get('/api/stats'),api.get('/api/recent')]);
+  const sym=getCurrSym();
+  document.getElementById('s-credit').textContent=`${stats.total_credit.toFixed(2)} ${sym}`;
+  document.getElementById('s-debit').textContent=`${stats.total_debit.toFixed(2)} ${sym}`;
+  document.getElementById('s-persons').textContent=stats.total_persons;
+  renderStats(stats);
+  renderRecent(recent);
+}
+function getCurrSym(){return CURRENCIES[parseInt(settings.currency_index)||0]?.sym||'₪';}
+function getCurrName(){return CURRENCIES[parseInt(settings.currency_index)||0]?.name||'ILS - شيكل';}
+function applySettings(){
+  const dark=settings.dark_mode==='true';
+  document.documentElement.toggleAttribute('data-dark',dark);
+  const t=document.getElementById('dark-toggle');
+  if(t)t.checked=dark;
+  document.getElementById('curr-name').textContent=getCurrName();
+  renderCurrencyList();
+}
+function showPage(name){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  const ni=document.getElementById('nav-'+name);
+  if(ni)ni.classList.add('active');
+  if(name==='stats')loadStatsPage();
+  if(name==='accounts')filterPersons();
+}
+function showDetail(pid,pname){
+  prevPage=document.querySelector('.page.active')?.id?.replace('page-','')||'accounts';
+  currentPersonId=pid; currentPersonName=pname;
+  document.getElementById('detail-name').textContent=pname;
+  document.getElementById('detail-menu').style.display='none';
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-detail').classList.add('active');
+  loadPersonDetail();
+}
+function goBack(){showPage(prevPage||'accounts');}
+function renderPersons(){
+  const sym=getCurrSym();
+  let list=allPersons.filter(p=>!searchQ||(p.name.includes(searchQ)||(p.phone||'').includes(searchQ)));
+  const el=document.getElementById('persons-list');
+  if(!list.length){el.innerHTML=`<div class="empty"><div class="empty-icon">👥</div><div class="empty-text">${searchQ?'لا توجد نتائج':'لا توجد حسابات<br>اضغط + لإضافة شخص'}</div></div>`;return;}
+  el.innerHTML=list.map(p=>{
+    const bal=p.balance||0,pos=bal>=0,absBal=Math.abs(bal),lbl=bal===0?'مسوّى':(pos?'له عليّ':'عليه لي');
+    return `<div class="person-item" onclick="showDetail('${p.id}','${escHtml(p.name)}')"><div class="avatar ${pos?'bg-green':'bg-red'}" style="color:${pos?'var(--credit)':'var(--debit)'}">${p.name[0]||'?'}</div><div class="person-info"><div class="person-name">${escHtml(p.name)}</div>${p.phone?`<div class="person-phone">${escHtml(p.phone)}</div>`:''}</div><div class="person-balance"><div class="balance-amt ${pos?'c-green':'c-red'}">${absBal.toFixed(2)} ${sym}</div><div class="balance-label ${pos?'c-green':'c-red'}">${lbl}</div></div></div>`;
+  }).join('');
+}
+function filterPersons(){searchQ=document.getElementById('search-input').value;renderPersons();}
+async function setSortBy(s){
+  sortBy=s;
+  ['name','balance','date'].forEach(x=>{document.getElementById('sort-check-'+x).style.display=x===s?'':'none';});
+  closeSheet('sort-sheet');
+  allPersons=await api.get(`/api/persons?sort=${sortBy}`);
+  renderPersons();
+}
+function showSortSheet(){document.getElementById('sort-sheet').classList.remove('hidden');}
+function openAddPerson(){
+  editPersonId=null;
+  document.getElementById('modal-person-title').textContent='إضافة شخص';
+  document.getElementById('f-name').value='';
+  document.getElementById('f-phone').value='';
+  document.getElementById('f-notes').value='';
+  document.getElementById('modal-person').classList.remove('hidden');
+  setTimeout(()=>document.getElementById('f-name').focus(),100);
+}
+function editCurrentPerson(){
+  const p=allPersons.find(x=>x.id===currentPersonId);
+  if(!p)return;
+  editPersonId=p.id;
+  document.getElementById('modal-person-title').textContent='تعديل الشخص';
+  document.getElementById('f-name').value=p.name;
+  document.getElementById('f-phone').value=p.phone||'';
+  document.getElementById('f-notes').value=p.notes||'';
+  document.getElementById('modal-person').classList.remove('hidden');
+}
+async function savePerson(){
+  const name=document.getElementById('f-name').value.trim();
+  if(!name){snack('الاسم مطلوب');return;}
+  const data={name,phone:document.getElementById('f-phone').value.trim()||null,notes:document.getElementById('f-notes').value.trim()||null};
+  if(editPersonId){
+    await api.put(`/api/persons/${editPersonId}`,data);
+    snack('تم التعديل بنجاح');
+    if(currentPersonId===editPersonId){document.getElementById('detail-name').textContent=name;currentPersonName=name;}
+  }else{
+    await api.post('/api/persons',data);
+    snack('تمت الإضافة بنجاح');
+  }
+  closeModal('modal-person');
+  allPersons=await api.get(`/api/persons?sort=${sortBy}`);
+  renderPersons();
+}
+function confirmDeletePerson(){
+  showConfirm(`حذف "${currentPersonName}"؟`,'سيتم حذف الشخص وجميع حركاته. لا يمكن التراجع.',async()=>{
+    await api.del(`/api/persons/${currentPersonId}`);
+    allPersons=await api.get(`/api/persons?sort=${sortBy}`);
+    renderPersons();
+    snack('تم الحذف');
+    goBack();
+  });
+}
+async function loadPersonDetail(){
+  const[p,txs]=await Promise.all([
+    allPersons.find(x=>x.id===currentPersonId)||api.get('/api/persons?sort=name').then(ps=>ps.find(x=>x.id===currentPersonId)),
+    api.get(`/api/persons/${currentPersonId}/transactions`)
+  ]);
+  const sym=getCurrSym(),bal=p?(p.balance||0):0,pos=bal>=0,absBal=Math.abs(bal),lbl=bal===0?'الحساب مسوّى':(pos?'له عليك':'عليه لك');
+  const bh=document.getElementById('detail-bal');
+  bh.className='bal-header '+(pos?'bg-green':'bg-red');
+  document.getElementById('detail-bal-amt').className='bal-amount '+(pos?'c-green':'c-red');
+  document.getElementById('detail-bal-amt').textContent=`${absBal.toFixed(2)} ${sym}`;
+  document.getElementById('detail-bal-lbl').className='bal-label '+(pos?'c-green':'c-red');
+  document.getElementById('detail-bal-lbl').textContent=lbl;
+  const ph=document.getElementById('detail-phone');
+  if(p&&p.phone){ph.textContent='📞 '+p.phone;ph.style.display='';}else ph.style.display='none';
+  const tl=document.getElementById('tx-list');
+  if(!txs.length){tl.innerHTML='<div class="empty"><div class="empty-icon">🧾</div><div class="empty-text">لا توجد حركات</div></div>';return;}
+  tl.innerHTML=txs.map(t=>{
+    const isC=t.type===0,d=new Date(t.date),dt=`${d.getDate()}/${d.getMonth()+1}/${d.getFullYear()}`;
+    return `<div class="tx-item"><div class="tx-icon ${isC?'bg-green':'bg-red'}" style="color:${isC?'var(--credit)':'var(--debit)'}">${isC?'↓':'↑'}</div><div class="tx-info"><div class="tx-desc">${escHtml(t.description||(isC?'له عليّ':'عليه لي'))}</div><div class="tx-date">${dt}</div></div><div class="tx-right"><div class="tx-amt ${isC?'c-green':'c-red'}">${isC?'+':'-'}${t.amount.toFixed(2)} ${sym}</div><button class="del-btn" onclick="confirmDelTx('${t.id}')">🗑</button></div></div>`;
+  }).join('');
+}
+function confirmDelTx(tid){
+  showConfirm('حذف الحركة؟','هل تريد حذف هذه الحركة؟',async()=>{
+    await api.del(`/api/transactions/${tid}`);
+    allPersons=await api.get(`/api/persons?sort=${sortBy}`);
+    loadPersonDetail();
+    snack('تم حذف الحركة');
+  });
+}
+function openAddTx(){
+  txType=0;
+  document.getElementById('f-amount').value='';
+  document.getElementById('f-desc').value='';
+  document.getElementById('modal-tx-title').textContent='حركة جديدة - '+currentPersonName;
+  setTxType(0);
+  document.getElementById('modal-tx').classList.remove('hidden');
+  setTimeout(()=>document.getElementById('f-amount').focus(),100);
+}
+function setTxType(t){
+  txType=t;
+  document.getElementById('type-credit').className='type-btn'+(t===0?' sel-credit':'');
+  document.getElementById('type-debit').className='type-btn'+(t===1?' sel-debit':'');
+  updateTxPreview();
+}
+function updateTxPreview(){
+  const p=document.getElementById('tx-preview');
+  if(txType===0){p.style.cssText='background:#e8f5ee;color:var(--credit)';p.textContent=`${currentPersonName} أعطاك مبلغاً ← يُضاف لرصيده لصالحك`;}
+  else{p.style.cssText='background:#fef5f5;color:var(--debit)';p.textContent=`${currentPersonName} أخذ منك مبلغاً ← يُضاف لرصيده ضدّك`;}
+}
+async function saveTransaction(){
+  const amtStr=document.getElementById('f-amount').value.trim().replace(',','.');
+  const amt=parseFloat(amtStr);
+  if(!amt||amt<=0){snack('أدخل مبلغاً صحيحاً');return;}
+  const desc=document.getElementById('f-desc').value.trim()||null;
+  await api.post('/api/transactions',{person_id:currentPersonId,amount:amt,type:txType,description:desc});
+  closeModal('modal-tx');
+  allPersons=await api.get(`/api/persons?sort=${sortBy}`);
+  loadPersonDetail();
+  snack('تم تسجيل الحركة');
+}
+async function loadStatsPage(){
+  const stats=await api.get('/api/stats');
+  renderStats(stats);
+  const sym=getCurrSym();
+  const ps=[...allPersons].filter(p=>p.balance!==0);
+  const top=[...ps].sort((a,b)=>b.balance-a.balance);
+  const el=document.getElementById('top-persons');
+  if(!top.length){el.innerHTML='';return;}
+  let html='<div class="section-head">ترتيب الأرصدة</div>';
+  html+=top.slice(0,8).map(p=>{
+    const pos=p.balance>0;
+    return `<div class="person-item" onclick="showDetail('${p.id}','${escHtml(p.name)}')"><div class="avatar ${pos?'bg-green':'bg-red'}" style="color:${pos?'var(--credit)':'var(--debit)'}">${p.name[0]||'?'}</div><div class="person-info"><div class="person-name">${escHtml(p.name)}</div></div><div class="balance-amt ${pos?'c-green':'c-red'}">${p.balance.toFixed(2)} ${sym}</div></div>`;
+  }).join('');
+  el.innerHTML=html;
+}
+function renderStats(stats){
+  const sym=getCurrSym();
+  el2('st-credit').textContent=`${stats.total_credit.toFixed(2)} ${sym}`;
+  el2('st-debit').textContent=`${stats.total_debit.toFixed(2)} ${sym}`;
+  el2('st-persons').textContent=stats.total_persons;
+  el2('st-tx').textContent=stats.total_tx;
+  el2('st-m-cr').textContent=`${stats.month_credit.toFixed(2)} ${sym}`;
+  el2('st-m-db').textContent=`${stats.month_debit.toFixed(2)} ${sym}`;
+  el2('st-m-tx').textContent=stats.month_tx;
+}
+function renderRecent(recent){
+  const sym=getCurrSym();
+  const rl=document.getElementById('recent-list');
+  if(!recent.length){rl.innerHTML='<div class="empty"><div class="empty-icon">📋</div><div class="empty-text">لا توجد حركات بعد</div></div>';return;}
+  rl.innerHTML=recent.map(t=>{
+    const isC=t.type===0,d=new Date(t.date),dt=`${d.getDate()}/${d.getMonth()+1}`;
+    return `<div class="tx-item" onclick="showDetail('${t.person_id}','${escHtml(t.person_name)}')"><div class="tx-icon ${isC?'bg-green':'bg-red'}" style="color:${isC?'var(--credit)':'var(--debit)'}">${isC?'↓':'↑'}</div><div class="tx-info"><div class="tx-desc">${escHtml(t.person_name)}</div><div class="tx-date">${escHtml(t.description||'')} · ${dt}</div></div><div class="tx-amt ${isC?'c-green':'c-red'}">${isC?'+':'-'}${t.amount.toFixed(2)} ${sym}</div></div>`;
+  }).join('');
+}
+async function toggleDark(v){
+  settings.dark_mode=String(v);
+  document.documentElement.toggleAttribute('data-dark',v);
+  await api.put('/api/settings',{dark_mode:String(v)});
+}
+function renderCurrencyList(){
+  const idx=parseInt(settings.currency_index)||0;
+  document.getElementById('currency-list').innerHTML=CURRENCIES.map((c,i)=>
+    `<div class="sheet-item" onclick="setCurrency(${i})"><span class="sheet-sym">${c.sym}</span><span style="flex:1">${c.name}</span>${i===idx?'<span class="sheet-check">✓</span>':''}</div>`
+  ).join('');
+}
+function openCurrencySheet(){renderCurrencyList();document.getElementById('currency-sheet').classList.remove('hidden');}
+async function setCurrency(i){
+  settings.currency_index=String(i);
+  await api.put('/api/settings',{currency_index:String(i)});
+  applySettings();
+  closeSheet('currency-sheet');
+  allPersons=await api.get(`/api/persons?sort=${sortBy}`);
+  renderPersons();
+  loadDashboard();
+}
+function exportAllCSV(){window.location.href='/api/export/csv';}
+function exportPersonCSV(){window.location.href=`/api/export/person/${currentPersonId}`;}
+function el2(id){return document.getElementById(id);}
+function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function closeModal(id){document.getElementById(id).classList.add('hidden');}
+function closeSheet(id){document.getElementById(id).classList.add('hidden');}
+let confirmCallback=null;
+function showConfirm(title,msg,cb){
+  confirmCallback=cb;
+  document.getElementById('confirm-title').textContent=title;
+  document.getElementById('confirm-msg').textContent=msg;
+  document.getElementById('confirm-overlay').classList.remove('hidden');
+  document.getElementById('confirm-ok').onclick=()=>{closeConfirm();cb&&cb();};
+}
+function closeConfirm(){document.getElementById('confirm-overlay').classList.add('hidden');}
+let snackTimer;
+function snack(msg){
+  const s=document.getElementById('snack');
+  s.textContent=msg;
+  s.classList.remove('hidden');
+  clearTimeout(snackTimer);
+  snackTimer=setTimeout(()=>s.classList.add('hidden'),2500);
+}
+function toggleDetailMenu(){
+  const m=document.getElementById('detail-menu');
+  m.style.display=m.style.display==='none'?'':'none';
+}
+document.addEventListener('click',e=>{
+  if(!e.target.closest('#detail-menu')&&!e.target.closest('#detail-menu-btn'))
+    document.getElementById('detail-menu').style.display='none';
+  if(!e.target.closest('.sheet')&&e.target.closest('.sheet-overlay'))
+    e.target.closest('.sheet-overlay').classList.add('hidden');
+  if(!e.target.closest('.modal')&&e.target.closest('.modal-overlay'))
+    e.target.closest('.modal-overlay').classList.add('hidden');
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape')
+    document.querySelectorAll('.modal-overlay:not(.hidden),.sheet-overlay:not(.hidden),.confirm-overlay:not(.hidden)').forEach(el=>el.classList.add('hidden'));
+});
+document.getElementById('f-amount').addEventListener('input',updateTxPreview);
+loadAll();
+<\/script>
+</body>
+</html>
